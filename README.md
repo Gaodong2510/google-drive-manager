@@ -60,7 +60,7 @@ google-drive-manager/
 ## 快速安装（Debian 12/13）
 
 ```bash
-git clone https://github.com/<your-username>/google-drive-manager.git
+git clone https://github.com/Gaodong2510/google-drive-manager.git
 cd google-drive-manager
 sudo bash install.sh
 ```
