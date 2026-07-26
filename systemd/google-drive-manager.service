@@ -1,0 +1,24 @@
+[Unit]
+Description=Google Drive Manager Web Panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/google-drive-manager/backend
+Environment=GDM_DATA_DIR=/opt/google-drive-manager/data
+Environment=GDM_HOST=0.0.0.0
+Environment=GDM_PORT=8787
+# Ensure fuse allow_other works when configured in /etc/fuse.conf
+ExecStart=/opt/google-drive-manager/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8787
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+
+# Mounts started by the app will be children; kill only main process on stop
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

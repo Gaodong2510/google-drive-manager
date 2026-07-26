@@ -1,0 +1,779 @@
+"""Google OAuth for Drive + rclone token writing."""
+
+from __future__ import annotations
+
+import configparser
+import json
+import logging
+import re
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from urllib.parse import urlencode
+
+import httpx
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.core.security import decrypt_value, encrypt_value
+from app.models.models import DriveAccount, OAuthState, SystemSetting
+from app.services.rclone_service import get_rclone
+from app.services.task_logger import log_task
+
+logger = logging.getLogger(__name__)
+
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO = "https://www.googleapis.com/oauth2/v2/userinfo"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def get_setting(db: Session, key: str, default: str = "") -> str:
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    return row.value if row else default
+
+
+def set_setting(db: Session, key: str, value: str) -> None:
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if row:
+        row.value = value
+        row.updated_at = _utcnow()
+    else:
+        row = SystemSetting(key=key, value=value)
+        db.add(row)
+    db.commit()
+
+
+def get_oauth_credentials(db: Session) -> tuple[str, str, str]:
+    settings = get_settings()
+    client_id = get_setting(db, "google_client_id") or settings.google_client_id
+    client_secret_enc = get_setting(db, "google_client_secret_enc")
+    if client_secret_enc:
+        try:
+            client_secret = decrypt_value(client_secret_enc)
+        except Exception:
+            client_secret = ""
+    else:
+        client_secret = settings.google_client_secret
+    redirect_uri = get_setting(db, "google_redirect_uri") or settings.google_redirect_uri
+    if not redirect_uri:
+        redirect_uri = f"http://127.0.0.1:{settings.port}/api/oauth/callback"
+    return client_id, client_secret, redirect_uri
+
+
+class OAuthService:
+    def __init__(self, db: Session) -> None:
+        self.db = db
+        self.rclone = get_rclone()
+
+    def start_auth(
+        self,
+        *,
+        name: str | None = None,
+        remote_name: str | None = None,
+        account_id: int | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        redirect_after: str | None = None,
+    ) -> dict:
+        cid, csecret, redirect_uri = get_oauth_credentials(self.db)
+        if client_id:
+            cid = client_id
+        if client_secret:
+            csecret = client_secret
+            set_setting(self.db, "google_client_secret_enc", encrypt_value(client_secret))
+            set_setting(self.db, "google_client_id", client_id or cid)
+
+        if not cid or not csecret:
+            raise ValueError(
+                "请先在「系统设置」中配置 Google OAuth Client ID 与 Client Secret。"
+                "可在 Google Cloud Console 创建 OAuth 客户端（Web 应用）。"
+            )
+
+        state = secrets.token_urlsafe(32)
+        expires = _utcnow() + timedelta(minutes=15)
+        st = OAuthState(
+            state=state,
+            account_id=account_id,
+            name=name,
+            remote_name=remote_name,
+            redirect_after=redirect_after,
+            expires_at=expires,
+        )
+        self.db.add(st)
+        self.db.commit()
+
+        settings = get_settings()
+        params = {
+            "client_id": cid,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": settings.oauth_scopes,
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": state,
+            "include_granted_scopes": "true",
+        }
+        url = f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
+        return {"authorize_url": url, "state": state, "account_id": account_id}
+
+    def handle_callback(self, code: str, state: str) -> DriveAccount:
+        st = self.db.query(OAuthState).filter(OAuthState.state == state).first()
+        if not st:
+            raise ValueError("无效的 OAuth state")
+        if st.expires_at.replace(tzinfo=timezone.utc) < _utcnow():
+            self.db.delete(st)
+            self.db.commit()
+            raise ValueError("OAuth state 已过期，请重新授权")
+
+        cid, csecret, redirect_uri = get_oauth_credentials(self.db)
+        if not cid or not csecret:
+            raise ValueError("OAuth 凭据未配置")
+
+        with httpx.Client(timeout=30) as client:
+            token_resp = client.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": cid,
+                    "client_secret": csecret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+            )
+            if token_resp.status_code != 200:
+                raise ValueError(f"获取 Token 失败: {token_resp.text[:300]}")
+            token_data = token_resp.json()
+
+            email = None
+            headers = {"Authorization": f"Bearer {token_data.get('access_token')}"}
+            ui = client.get(GOOGLE_USERINFO, headers=headers)
+            if ui.status_code == 200:
+                email = ui.json().get("email")
+
+        # Build rclone-compatible token JSON
+        # rclone expects: {"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}
+        expiry = None
+        if "expires_in" in token_data:
+            exp_dt = _utcnow() + timedelta(seconds=int(token_data["expires_in"]))
+            expiry = exp_dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+            # rclone often uses RFC3339 with Z
+            expiry = exp_dt.isoformat().replace("+00:00", "Z")
+
+        rclone_token = {
+            "access_token": token_data.get("access_token"),
+            "token_type": token_data.get("token_type", "Bearer"),
+            "refresh_token": token_data.get("refresh_token"),
+            "expiry": expiry,
+        }
+        if not rclone_token.get("refresh_token") and st.account_id:
+            # Keep old refresh token if Google didn't return a new one
+            old = self.db.query(DriveAccount).filter(DriveAccount.id == st.account_id).first()
+            if old and old.token_enc:
+                try:
+                    old_tok = json.loads(decrypt_value(old.token_enc))
+                    if old_tok.get("refresh_token"):
+                        rclone_token["refresh_token"] = old_tok["refresh_token"]
+                except Exception:
+                    pass
+
+        token_json = json.dumps(rclone_token)
+
+        account: DriveAccount | None = None
+        if st.account_id:
+            account = self.db.query(DriveAccount).filter(DriveAccount.id == st.account_id).first()
+
+        if account is None:
+            # Create new account
+            base_name = st.name or (email.split("@")[0] if email else "drive")
+            name = base_name
+            i = 1
+            while self.db.query(DriveAccount).filter(DriveAccount.name == name).first():
+                i += 1
+                name = f"{base_name}_{i}"
+            remote = st.remote_name or _safe_remote(name)
+            while self.db.query(DriveAccount).filter(DriveAccount.remote_name == remote).first():
+                remote = f"{remote}_{i}"
+                i += 1
+            account = DriveAccount(
+                name=name,
+                remote_name=remote,
+                email=email,
+                status="pending",
+            )
+            self.db.add(account)
+            self.db.flush()
+
+        account.email = email or account.email
+        account.client_id_enc = encrypt_value(cid)
+        account.client_secret_enc = encrypt_value(csecret)
+        account.token_enc = encrypt_value(token_json)
+        account.status = "connected"
+        account.last_error = None
+        account.last_check_at = _utcnow()
+        self.db.add(account)
+        self.db.commit()
+        self.db.refresh(account)
+
+        # Write rclone config
+        try:
+            self.rclone.upsert_drive_remote(
+                account.remote_name,
+                client_id=cid,
+                client_secret=csecret,
+                token_json=token_json,
+                root_folder_id=account.root_folder_id,
+                team_drive=account.team_drive,
+            )
+            # Probe about
+            try:
+                about = self.rclone.about(account.remote_name)
+                account.total_bytes = about.get("total")
+                account.used_bytes = about.get("used")
+                account.free_bytes = about.get("free")
+                account.status = "connected"
+            except Exception as exc:
+                account.last_error = str(exc)[:500]
+                logger.warning("about after oauth failed: %s", exc)
+            self.db.add(account)
+            self.db.commit()
+        except Exception as exc:
+            account.status = "error"
+            account.last_error = str(exc)[:500]
+            self.db.add(account)
+            self.db.commit()
+            log_task(
+                self.db,
+                task_type="oauth",
+                account_id=account.id,
+                status="error",
+                message=f"OAuth 成功但写入 rclone 配置失败: {account.name}",
+                detail=str(exc),
+            )
+            raise
+
+        self.db.delete(st)
+        self.db.commit()
+        log_task(
+            self.db,
+            task_type="oauth",
+            account_id=account.id,
+            status="success",
+            message=f"Google Drive 授权成功: {account.name} ({account.email})",
+        )
+        return account
+
+    def test_account(self, account: DriveAccount) -> dict:
+        # Ensure rclone config is synced
+        self.sync_account_to_rclone(account)
+        about = self.rclone.test_connection(account.remote_name)
+        data = about["about"]
+        account.total_bytes = data.get("total")
+        account.used_bytes = data.get("used")
+        account.free_bytes = data.get("free")
+        account.status = "connected"
+        account.last_check_at = _utcnow()
+        account.last_error = None
+        self.db.add(account)
+        self.db.commit()
+        return data
+
+    def sync_account_to_rclone(self, account: DriveAccount) -> None:
+        if not account.token_enc:
+            raise ValueError("账号尚未完成授权（无 Token）")
+        token_json = decrypt_value(account.token_enc)
+        cid = decrypt_value(account.client_id_enc) if account.client_id_enc else ""
+        csecret = decrypt_value(account.client_secret_enc) if account.client_secret_enc else ""
+        if not cid or not csecret:
+            cid2, csecret2, _ = get_oauth_credentials(self.db)
+            cid = cid or cid2
+            csecret = csecret or csecret2
+        self.rclone.upsert_drive_remote(
+            account.remote_name,
+            client_id=cid,
+            client_secret=csecret,
+            token_json=token_json,
+            root_folder_id=account.root_folder_id,
+            team_drive=account.team_drive,
+        )
+
+    def apply_token(
+        self,
+        *,
+        token_raw: str,
+        account_id: int | None = None,
+        name: str | None = None,
+        remote_name: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        root_folder_id: str | None = None,
+        team_drive: bool | None = None,
+        notes: str | None = None,
+        test_connection: bool = True,
+    ) -> DriveAccount:
+        """Apply pasted rclone/Google token JSON to create or update an account."""
+        token_dict = extract_token_json(token_raw)
+        token_json = json.dumps(token_dict, ensure_ascii=False)
+
+        g_cid, g_csecret, _ = get_oauth_credentials(self.db)
+        cid = (client_id or "").strip() or g_cid
+        csecret = (client_secret or "").strip() or g_csecret
+
+        account: DriveAccount | None = None
+        if account_id is not None:
+            account = self.db.query(DriveAccount).filter(DriveAccount.id == account_id).first()
+            if not account:
+                raise ValueError("账号不存在")
+
+        if account is None:
+            base_name = (name or "drive").strip() or "drive"
+            display = base_name
+            i = 1
+            while self.db.query(DriveAccount).filter(DriveAccount.name == display).first():
+                i += 1
+                display = f"{base_name}_{i}"
+            remote = (remote_name or _safe_remote(display)).strip()
+            remote = _safe_remote(remote)
+            i = 1
+            base_remote = remote
+            while self.db.query(DriveAccount).filter(DriveAccount.remote_name == remote).first():
+                i += 1
+                remote = f"{base_remote}_{i}"
+            account = DriveAccount(
+                name=display,
+                remote_name=remote,
+                status="pending",
+                root_folder_id=root_folder_id,
+                team_drive=bool(team_drive),
+                notes=notes,
+            )
+            self.db.add(account)
+            self.db.flush()
+        else:
+            if name and name.strip() and name.strip() != account.name:
+                if self.db.query(DriveAccount).filter(DriveAccount.name == name.strip()).first():
+                    raise ValueError("账号名称已存在")
+                account.name = name.strip()
+            if root_folder_id is not None:
+                account.root_folder_id = root_folder_id or None
+            if team_drive is not None:
+                account.team_drive = team_drive
+            if notes is not None:
+                account.notes = notes
+
+        # Preserve existing client credentials if not provided
+        if not cid and account.client_id_enc:
+            try:
+                cid = decrypt_value(account.client_id_enc)
+            except Exception:
+                cid = ""
+        if not csecret and account.client_secret_enc:
+            try:
+                csecret = decrypt_value(account.client_secret_enc)
+            except Exception:
+                csecret = ""
+
+        # Merge refresh_token if new paste lacks it
+        if not token_dict.get("refresh_token") and account.token_enc:
+            try:
+                old_tok = json.loads(decrypt_value(account.token_enc))
+                if old_tok.get("refresh_token"):
+                    token_dict["refresh_token"] = old_tok["refresh_token"]
+                    token_json = json.dumps(token_dict, ensure_ascii=False)
+            except Exception:
+                pass
+
+        email = _fetch_email(token_dict.get("access_token") or "")
+        if email:
+            account.email = email
+
+        if cid:
+            account.client_id_enc = encrypt_value(cid)
+        if csecret:
+            account.client_secret_enc = encrypt_value(csecret)
+        account.token_enc = encrypt_value(token_json)
+        account.status = "connected"
+        account.last_error = None
+        account.last_check_at = _utcnow()
+        self.db.add(account)
+        self.db.commit()
+        self.db.refresh(account)
+
+        try:
+            self.rclone.upsert_drive_remote(
+                account.remote_name,
+                client_id=cid or "",
+                client_secret=csecret or "",
+                token_json=token_json,
+                root_folder_id=account.root_folder_id,
+                team_drive=account.team_drive,
+            )
+            if test_connection:
+                try:
+                    about = self.rclone.about(account.remote_name)
+                    account.total_bytes = about.get("total")
+                    account.used_bytes = about.get("used")
+                    account.free_bytes = about.get("free")
+                    account.status = "connected"
+                    account.last_error = None
+                except Exception as exc:
+                    account.status = "error"
+                    account.last_error = str(exc)[:500]
+                    logger.warning("about after paste token failed: %s", exc)
+            self.db.add(account)
+            self.db.commit()
+            self.db.refresh(account)
+        except Exception as exc:
+            account.status = "error"
+            account.last_error = str(exc)[:500]
+            self.db.add(account)
+            self.db.commit()
+            log_task(
+                self.db,
+                task_type="oauth",
+                account_id=account.id,
+                status="error",
+                message=f"Token 已保存但写入 rclone 失败: {account.name}",
+                detail=str(exc),
+            )
+            raise
+
+        log_task(
+            self.db,
+            task_type="oauth",
+            account_id=account.id,
+            status="success" if account.status == "connected" else "warning",
+            message=f"粘贴 Token 授权完成: {account.name}"
+            + (f" ({account.email})" if account.email else ""),
+            detail=None if account.status == "connected" else account.last_error,
+        )
+        return account
+
+    def preview_rclone_import(self, config_text: str) -> list[dict[str, Any]]:
+        remotes = parse_rclone_config_text(config_text)
+        if not remotes:
+            raise ValueError("未找到 type=drive 的 remote，请粘贴完整 rclone 配置或 drive 段")
+        return remotes
+
+    def import_rclone_remotes(
+        self,
+        *,
+        config_text: str,
+        selected_remotes: list[str] | None = None,
+        name_prefix: str | None = None,
+        test_connection: bool = True,
+        overwrite: bool = False,
+    ) -> list[DriveAccount]:
+        """Import one or more drive remotes from rclone.conf text."""
+        text = (config_text or "").strip()
+        if not text:
+            raise ValueError("rclone 配置内容为空")
+
+        cp = configparser.ConfigParser(interpolation=None)
+        try:
+            cp.read_string(text)
+        except configparser.Error as exc:
+            raise ValueError(f"rclone 配置解析失败: {exc}") from exc
+
+        previews = parse_rclone_config_text(text)
+        available = {p["remote_name"]: p for p in previews}
+        if not available:
+            raise ValueError("未找到 type=drive 的 remote")
+
+        if selected_remotes:
+            targets = []
+            for name in selected_remotes:
+                if name not in available:
+                    raise ValueError(f"配置中不存在 drive remote: {name}")
+                targets.append(name)
+        else:
+            targets = list(available.keys())
+
+        imported: list[DriveAccount] = []
+        errors: list[str] = []
+
+        for section in targets:
+            try:
+                acc = self._import_one_rclone_section(
+                    cp,
+                    section,
+                    name_prefix=name_prefix,
+                    test_connection=test_connection,
+                    overwrite=overwrite,
+                )
+                imported.append(acc)
+            except Exception as exc:
+                logger.exception("import remote %s failed", section)
+                errors.append(f"{section}: {exc}")
+
+        if not imported:
+            raise ValueError("导入失败: " + "; ".join(errors[:5]))
+
+        log_task(
+            self.db,
+            task_type="oauth",
+            status="success" if not errors else "warning",
+            message=f"从 rclone 配置导入 {len(imported)} 个账号"
+            + (f"，{len(errors)} 个失败" if errors else ""),
+            detail="; ".join(errors) if errors else None,
+        )
+        return imported
+
+    def _import_one_rclone_section(
+        self,
+        cp: configparser.ConfigParser,
+        section: str,
+        *,
+        name_prefix: str | None,
+        test_connection: bool,
+        overwrite: bool,
+    ) -> DriveAccount:
+        if not cp.has_section(section):
+            raise ValueError(f"配置中不存在 remote: {section}")
+        rtype = (cp.get(section, "type", fallback="") or "").strip().lower()
+        if rtype != "drive":
+            raise ValueError(f"{section} 不是 drive 类型")
+
+        token_raw = (cp.get(section, "token", fallback="") or "").strip()
+        if not token_raw:
+            raise ValueError(f"{section} 缺少 token")
+        token_dict = extract_token_json(token_raw)
+        token_json = json.dumps(token_dict, ensure_ascii=False)
+
+        cid = (cp.get(section, "client_id", fallback="") or "").strip()
+        csecret = (cp.get(section, "client_secret", fallback="") or "").strip()
+        if not cid or not csecret:
+            g_cid, g_csecret, _ = get_oauth_credentials(self.db)
+            cid = cid or g_cid
+            csecret = csecret or g_csecret
+
+        root = (cp.get(section, "root_folder_id", fallback="") or "").strip() or None
+        team_raw = (cp.get(section, "team_drive", fallback="") or "").strip()
+        team_drive = bool(team_raw)
+        if team_raw and not root:
+            root = team_raw
+
+        remote = _safe_remote(section)
+        existing = (
+            self.db.query(DriveAccount).filter(DriveAccount.remote_name == remote).first()
+        )
+        if existing and not overwrite:
+            raise ValueError(f"remote「{remote}」已存在，勾选覆盖后再导入")
+
+        display_base = f"{name_prefix}{section}" if name_prefix else section
+        if existing:
+            account = existing
+            # Keep display name unless empty
+        else:
+            display = display_base
+            i = 1
+            while self.db.query(DriveAccount).filter(DriveAccount.name == display).first():
+                i += 1
+                display = f"{display_base}_{i}"
+            # Ensure unique remote
+            final_remote = remote
+            j = 1
+            while (
+                self.db.query(DriveAccount)
+                .filter(DriveAccount.remote_name == final_remote)
+                .first()
+            ):
+                j += 1
+                final_remote = f"{remote}_{j}"
+            account = DriveAccount(
+                name=display,
+                remote_name=final_remote,
+                status="pending",
+            )
+            self.db.add(account)
+            self.db.flush()
+
+        account.root_folder_id = root
+        account.team_drive = team_drive
+        if cid:
+            account.client_id_enc = encrypt_value(cid)
+        if csecret:
+            account.client_secret_enc = encrypt_value(csecret)
+        account.token_enc = encrypt_value(token_json)
+
+        email = _fetch_email(token_dict.get("access_token") or "")
+        if email:
+            account.email = email
+
+        account.status = "connected"
+        account.last_error = None
+        account.last_check_at = _utcnow()
+        self.db.add(account)
+        self.db.commit()
+        self.db.refresh(account)
+
+        self.rclone.upsert_drive_remote(
+            account.remote_name,
+            client_id=cid or "",
+            client_secret=csecret or "",
+            token_json=token_json,
+            root_folder_id=account.root_folder_id,
+            team_drive=account.team_drive,
+        )
+
+        if test_connection:
+            try:
+                about = self.rclone.about(account.remote_name)
+                account.total_bytes = about.get("total")
+                account.used_bytes = about.get("used")
+                account.free_bytes = about.get("free")
+                account.status = "connected"
+                account.last_error = None
+            except Exception as exc:
+                account.status = "error"
+                account.last_error = str(exc)[:500]
+                logger.warning("about after import failed: %s", exc)
+            self.db.add(account)
+            self.db.commit()
+            self.db.refresh(account)
+
+        return account
+
+
+def _safe_remote(name: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_")
+    return (s or "drive")[:48]
+
+
+def extract_token_json(raw: str) -> dict[str, Any]:
+    """Parse token from rclone authorize output or plain JSON."""
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("Token 不能为空")
+
+    # rclone authorize often wraps JSON between markers
+    m = re.search(
+        r"(?:Paste the following into your remote machine.*?-->)?\s*(\{.*\})\s*(?:<---End paste)?",
+        text,
+        re.S | re.I,
+    )
+    candidate = m.group(1) if m else text
+
+    # Try direct JSON first
+    for attempt in (candidate, text):
+        try:
+            data = json.loads(attempt)
+            if isinstance(data, dict):
+                return _normalize_token_dict(data)
+        except json.JSONDecodeError:
+            pass
+
+    # Find first JSON object containing access_token or refresh_token
+    for match in re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.S):
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict) and (
+                data.get("access_token") or data.get("refresh_token")
+            ):
+                return _normalize_token_dict(data)
+        except json.JSONDecodeError:
+            continue
+
+    # Greedy brace match for nested-ish token blobs
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(text[start : end + 1])
+            if isinstance(data, dict):
+                return _normalize_token_dict(data)
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(
+        "无法解析 Token：请粘贴 rclone authorize 输出的整段 JSON，"
+        "需包含 access_token 或 refresh_token。"
+    )
+
+
+def _normalize_token_dict(data: dict[str, Any]) -> dict[str, Any]:
+    access = data.get("access_token")
+    refresh = data.get("refresh_token")
+    if not access and not refresh:
+        raise ValueError("Token JSON 缺少 access_token 与 refresh_token")
+    if not refresh:
+        logger.warning("Token 无 refresh_token，长期使用可能失效")
+
+    expiry = data.get("expiry") or data.get("expires") or data.get("expire")
+    if not expiry and data.get("expires_in"):
+        try:
+            exp_dt = _utcnow() + timedelta(seconds=int(data["expires_in"]))
+            expiry = exp_dt.isoformat().replace("+00:00", "Z")
+        except (TypeError, ValueError):
+            expiry = None
+
+    return {
+        "access_token": access or "",
+        "token_type": data.get("token_type") or "Bearer",
+        "refresh_token": refresh or "",
+        "expiry": expiry,
+    }
+
+
+def parse_rclone_config_text(config_text: str) -> list[dict[str, Any]]:
+    """Parse rclone.conf text and return drive-type remote previews."""
+    text = (config_text or "").strip()
+    if not text:
+        raise ValueError("rclone 配置内容为空")
+
+    # rclone token JSON contains % and {} — disable interpolation
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read_string(text)
+    except configparser.Error as exc:
+        raise ValueError(f"rclone 配置解析失败: {exc}") from exc
+
+    remotes: list[dict[str, Any]] = []
+    for section in cp.sections():
+        rtype = (cp.get(section, "type", fallback="") or "").strip().lower()
+        if rtype != "drive":
+            continue
+        token_raw = (cp.get(section, "token", fallback="") or "").strip()
+        has_token = False
+        if token_raw:
+            try:
+                extract_token_json(token_raw)
+                has_token = True
+            except ValueError:
+                has_token = bool(token_raw)
+        root = (cp.get(section, "root_folder_id", fallback="") or "").strip() or None
+        team = (cp.get(section, "team_drive", fallback="") or "").strip() or None
+        remotes.append(
+            {
+                "remote_name": section,
+                "type": rtype,
+                "has_token": has_token,
+                "has_client_id": bool((cp.get(section, "client_id", fallback="") or "").strip()),
+                "has_client_secret": bool(
+                    (cp.get(section, "client_secret", fallback="") or "").strip()
+                ),
+                "root_folder_id": root,
+                "team_drive": team,
+                "scope": (cp.get(section, "scope", fallback="") or "").strip() or None,
+            }
+        )
+    return remotes
+
+
+def _fetch_email(access_token: str) -> str | None:
+    if not access_token:
+        return None
+    try:
+        with httpx.Client(timeout=15) as client:
+            ui = client.get(
+                GOOGLE_USERINFO,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if ui.status_code == 200:
+                return ui.json().get("email")
+    except Exception as exc:
+        logger.debug("userinfo fetch failed: %s", exc)
+    return None

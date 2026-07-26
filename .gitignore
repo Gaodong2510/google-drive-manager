@@ -1,0 +1,50 @@
+# Runtime data (secrets, tokens, DB, logs, cache)
+data/config/*
+data/logs/*
+data/cache/*
+data/backups/*
+data/rclone/*
+!data/**/.gitkeep
+
+# Python
+venv/
+backend/.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.enc
+credentials.json
+client_secret*.json
+**/rclone.conf
+*.db
+*.db-shm
+*.db-wal
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Misc
+*.log
+.coverage
+htmlcov/

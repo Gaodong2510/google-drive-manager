@@ -1,0 +1,41 @@
+# Google Drive Manager — Docker deployment
+#
+# IMPORTANT:
+#   rclone FUSE mounts work best on the HOST (native install).
+#   This compose stack runs the Web panel. For in-container mounts you MUST
+#   use privileged mode + fuse device (see comments). Prefer native install
+#   for Emby/Plex production media servers.
+#
+# Quick start (web panel only / or privileged mounts):
+#   docker compose up -d --build
+
+services:
+  gdm:
+    build: .
+    container_name: google-drive-manager
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      GDM_DATA_DIR: /data
+      GDM_HOST: 0.0.0.0
+      GDM_PORT: 8787
+      # GDM_DEFAULT_PASSWORD: change-me
+    volumes:
+      - ./data:/data
+      # Bind host media mount points so panel can manage paths
+      - /mnt:/mnt:rshared
+      - /media:/media:rshared
+    # Uncomment for in-container FUSE mounts (less ideal for production):
+    # privileged: true
+    # cap_add:
+    #   - SYS_ADMIN
+    # devices:
+    #   - /dev/fuse
+    # security_opt:
+    #   - apparmor:unconfined
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
