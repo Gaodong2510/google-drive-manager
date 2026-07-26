@@ -9,6 +9,7 @@ import MountsPage from "./pages/Mounts";
 import FilesPage from "./pages/Files";
 import CachePage from "./pages/Cache";
 import TasksPage from "./pages/Tasks";
+import UploadsPage from "./pages/Uploads";
 import SettingsPage from "./pages/Settings";
 import HelpPage from "./pages/Help";
 
@@ -35,6 +36,7 @@ export default function App() {
         <Route path="accounts" element={<AccountsPage />} />
         <Route path="mounts" element={<MountsPage />} />
         <Route path="files" element={<FilesPage />} />
+        <Route path="uploads" element={<UploadsPage />} />
         <Route path="cache" element={<CachePage />} />
         <Route path="tasks" element={<TasksPage />} />
         <Route path="settings" element={<SettingsPage />} />

@@ -93,3 +93,51 @@ export type TaskLog = {
   detail?: string | null;
   created_at: string;
 };
+
+export type UploadEvent = {
+  time?: string | null;
+  event: string;
+  path: string;
+  message: string;
+  size_bytes?: number | null;
+};
+
+export type MountUpload = {
+  mount_id: number;
+  mount_name: string;
+  local_path: string;
+  status: string;
+  rc_enabled: boolean;
+  rc_port?: number | null;
+  objects: number;
+  in_use: number;
+  to_upload: number;
+  uploading: number;
+  cache_total_bytes: number;
+  cache_total_display: string;
+  last_cleaned_at?: string | null;
+  transfer_bytes?: number | null;
+  transfer_total_bytes?: number | null;
+  transfer_percent?: number | null;
+  transfer_speed_bps?: number | null;
+  transfer_eta?: string | null;
+  transfers_done?: number | null;
+  transfers_total?: number | null;
+  errors: number;
+  recent_events: UploadEvent[];
+  active: boolean;
+  source: string;
+  note?: string | null;
+};
+
+export type UploadStatus = {
+  mounts: MountUpload[];
+  summary: {
+    to_upload: number;
+    uploading: number;
+    errors: number;
+    active_mounts: number;
+    total_speed_bps: number;
+    any_active: boolean;
+  };
+};

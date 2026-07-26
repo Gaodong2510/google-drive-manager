@@ -14,6 +14,7 @@ import {
   X,
   Shield,
   BookOpen,
+  CloudUpload,
 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "../lib/auth";
@@ -25,6 +26,7 @@ const nav = [
   { to: "/accounts", icon: Cloud, label: "Drive 账号" },
   { to: "/mounts", icon: HardDrive, label: "挂载管理" },
   { to: "/files", icon: FolderOpen, label: "文件浏览" },
+  { to: "/uploads", icon: CloudUpload, label: "上传进度" },
   { to: "/cache", icon: Database, label: "缓存管理" },
   { to: "/tasks", icon: Activity, label: "任务日志" },
   { to: "/settings", icon: Settings, label: "系统设置" },

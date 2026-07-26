@@ -273,6 +273,47 @@ class DashboardOut(BaseModel):
     mounts: list[MountOut] = Field(default_factory=list)
 
 
+class UploadEventOut(BaseModel):
+    time: str | None = None
+    event: str
+    path: str
+    message: str
+    size_bytes: int | None = None
+
+
+class MountUploadOut(BaseModel):
+    mount_id: int
+    mount_name: str
+    local_path: str
+    status: str
+    rc_enabled: bool = False
+    rc_port: int | None = None
+    objects: int = 0
+    in_use: int = 0
+    to_upload: int = 0
+    uploading: int = 0
+    cache_total_bytes: int = 0
+    cache_total_display: str = "0"
+    last_cleaned_at: str | None = None
+    transfer_bytes: int | None = None
+    transfer_total_bytes: int | None = None
+    transfer_percent: float | None = None
+    transfer_speed_bps: float | None = None
+    transfer_eta: str | None = None
+    transfers_done: int | None = None
+    transfers_total: int | None = None
+    errors: int = 0
+    recent_events: list[UploadEventOut] = Field(default_factory=list)
+    active: bool = False
+    source: str = "log"
+    note: str | None = None
+
+
+class UploadStatusOut(BaseModel):
+    mounts: list[MountUploadOut] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
 class CacheInfo(BaseModel):
     cache_root: str
     total_size_bytes: int

@@ -2,12 +2,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-生产级 **Google Drive 挂载管理 Web 面板**，面向 Debian 12/13 VPS 与 **Emby / Plex** 影视媒体服务器场景。
+生产级 **Google Drive 挂载管理 Web 面板**，面向 Debian 12/13 VPS 与 **Emby / Plex / MoviePilot** 影视媒体服务器场景。
 
 基于 **rclone mount + VFS Cache**，提供：
 
 - 多 Google Drive 账号授权（粘贴 Token / 导入 rclone / Web OAuth）  
 - 多挂载点启停 / 参数配置 / 实时日志  
+- **上传进度**（VFS 回写队列 / 文件最终状态 / rclone RC 实时速度，适配 MoviePilot 入库）  
 - Watchdog 断线自动恢复  
 - 开机 systemd 自启  
 - 本地挂载目录文件浏览器  
@@ -184,16 +185,29 @@ http://你的域名或IP:8787/api/oauth/callback
 - 磁盘使用率 >80% 会在 Dashboard 告警  
 - Emby/Plex 扫描间隔不要过密，减轻 API 与目录缓存压力  
 
-### 5. 日志
+### 5. 上传进度（MoviePilot / 媒体整理）
+
+MoviePilot 等工具写入挂载目录时，文件先进入本地 **VFS 缓存**，再由 rclone 回写到 Google Drive。
+
+1. 打开面板 **上传进度**（`/uploads`），可自动刷新  
+2. 关注顶部 **排队 / 上传中** 计数；均为 `0` 且视频状态为「成功」即云端完成  
+3. Dashboard 也有摘要卡片  
+
+> 本地整理完成 ≠ 云端已传完。历史日志中的「排队」在文件成功后会折叠为最终「成功」，不是错误。
+
+挂载启动时会自动启用本机 rclone RC（`127.0.0.1:5572+mount_id`）以显示实时速度；旧挂载需在面板中重启一次挂载。
+
+### 6. 日志
 
 | 来源 | 方式 |
 |------|------|
+| 上传进度 | **上传进度** 页面 |
 | 面板任务 | **任务日志** 页面 |
 | 单个挂载 rclone 日志 | 挂载卡片 → 日志 |
 | 系统服务 | `journalctl -u google-drive-manager -f` |
 | 文件 | `data/logs/mounts/mount_<id>.log` |
 
-### 6. 备份 / 恢复
+### 7. 备份 / 恢复
 
 - **系统设置** → 创建备份（加密）  
 - 下载 `.tar.gz.enc` 妥善保存  

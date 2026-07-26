@@ -23,6 +23,7 @@ from app.schemas.schemas import (
     SettingUpdate,
     SystemStats,
     TaskLogOut,
+    UploadStatusOut,
 )
 from app.api.mounts import to_out
 from app.services import backup_service
@@ -30,6 +31,7 @@ from app.services.mount_service import MountService
 from app.services.oauth_service import get_setting, set_setting
 from app.services.rclone_service import get_rclone
 from app.services.system_monitor import clear_cache_dir, disk_warnings_for_paths, get_cache_info, get_system_stats
+from app.services.upload_monitor import build_mount_upload_status, summarize_uploads
 from app.services.watchdog import get_watchdog
 
 router = APIRouter(tags=["system"])
@@ -149,6 +151,30 @@ def update_settings_api(
     if body.watchdog_max_restarts is not None:
         set_setting(db, "watchdog_max_restarts", str(body.watchdog_max_restarts))
     return get_settings_api(db, _)
+
+
+@router.get("/uploads/status", response_model=UploadStatusOut)
+def uploads_status(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    """VFS / Google Drive 上传进度：解析 rclone 日志，挂载开启 RC 后可叠加实时速度。"""
+    svc = MountService(db)
+    mounts = db.query(MountPoint).order_by(MountPoint.id).all()
+    statuses = []
+    for m in mounts:
+        try:
+            svc.refresh_status(m)
+        except Exception:
+            pass
+        statuses.append(
+            build_mount_upload_status(
+                mount_id=m.id,
+                mount_name=m.name,
+                local_path=m.local_path,
+                mount_status=m.status or "stopped",
+                log_path=svc.log_path(m),
+                try_rc=True,
+            )
+        )
+    return summarize_uploads(statuses)
 
 
 @router.get("/tasks", response_model=list[TaskLogOut])

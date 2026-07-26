@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   Activity,
   Cloud,
+  CloudUpload,
   Cpu,
   HardDrive,
   MemoryStick,
@@ -11,18 +12,23 @@ import {
   Server,
 } from "lucide-react";
 import { api, formatBytes, formatDuration, formatSpeed } from "../lib/api";
-import type { Dashboard } from "../lib/types";
+import type { Dashboard, UploadStatus } from "../lib/types";
 import { Alert, Loading, PageHeader, ProgressBar, StatCard, StatusBadge } from "../components/ui";
 
 export default function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
+  const [uploads, setUploads] = useState<UploadStatus | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
     try {
-      const d = await api.get<Dashboard>("/dashboard");
+      const [d, u] = await Promise.all([
+        api.get<Dashboard>("/dashboard"),
+        api.get<UploadStatus>("/uploads/status").catch(() => null),
+      ]);
       setData(d);
+      setUploads(u);
       setError("");
     } catch (e: any) {
       setError(e.detail || e.message);
@@ -110,6 +116,46 @@ export default function DashboardPage() {
           sub={`系统运行 ${formatDuration(s.uptime_seconds)}`}
         />
       </div>
+
+      {uploads && (
+        <div className="mb-6">
+          <Link to="/uploads" className="card block transition hover:ring-2 hover:ring-brand-200 dark:hover:ring-brand-800">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                <CloudUpload size={18} className="text-sky-500" />
+                Drive 上传进度
+              </div>
+              <span className="text-xs text-brand-600">查看详情 →</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-4 text-sm">
+              <div>
+                <div className="text-xs text-slate-400">状态</div>
+                <div className="font-semibold">
+                  {uploads.summary.any_active ? (
+                    <span className="text-sky-600">进行中</span>
+                  ) : (
+                    <span className="text-emerald-600">空闲</span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-400">排队 / 上传中</div>
+                <div className="font-semibold">
+                  {uploads.summary.to_upload} / {uploads.summary.uploading}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-400">速度</div>
+                <div className="font-semibold">{formatSpeed(uploads.summary.total_speed_bps)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-400">错误</div>
+                <div className="font-semibold">{uploads.summary.errors}</div>
+              </div>
+            </div>
+          </Link>
+        </div>
+      )}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Drive 账号" value={data.accounts_total} icon={<Cloud size={18} />} accent="bg-sky-50 text-sky-600 dark:bg-sky-950 dark:text-sky-300" />

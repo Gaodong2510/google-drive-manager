@@ -51,6 +51,7 @@ def build_mount_args(
     log_file: Path,
     config_path: Path,
     rclone_bin: str,
+    mount_id: int | None = None,
 ) -> list[str]:
     remote_name = validate_remote_name(remote_name)
     local = validate_path(local_path)
@@ -74,6 +75,24 @@ def build_mount_args(
         "--log-format",
         "date,time",
     ]
+
+    # Localhost RC for upload progress (MoviePilot writes → VFS → Drive)
+    if mount_id is not None and int(mount_id) > 0:
+        from app.services.upload_monitor import rc_port_for_mount
+
+        rc_port = rc_port_for_mount(int(mount_id))
+        args.extend(
+            [
+                "--rc",
+                "--rc-addr",
+                f"127.0.0.1:{rc_port}",
+                "--rc-no-auth",
+                "--stats",
+                "5s",
+                "--stats-log-level",
+                "NOTICE",
+            ]
+        )
 
     vfs_mode = str(params.get("vfs_cache_mode", "full"))
     if vfs_mode not in ("off", "minimal", "writes", "full"):
@@ -190,6 +209,7 @@ class MountService:
                 log_file=self.log_path(mount),
                 config_path=self.rclone.config_path,
                 rclone_bin=binary,
+                mount_id=mount.id,
             )
         except Exception as exc:
             return [f"# error: {exc}"]
@@ -384,6 +404,7 @@ class MountService:
             log_file=log_file,
             config_path=self.rclone.config_path,
             rclone_bin=binary,
+            mount_id=mount.id,
         )
 
         mount.status = "starting"
