@@ -20,6 +20,7 @@ import { useState } from "react";
 import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
 import { GdmLogo } from "./BrandIcons";
+import PwaInstall from "./PwaInstall";
 import clsx from "clsx";
 
 const nav = [
@@ -149,6 +150,7 @@ export default function Layout() {
         <main className="page-shell flex-1 p-4 md:p-6 animate-fade-in">
           <Outlet />
         </main>
+        <PwaInstall />
       </div>
     </div>
   );

@@ -106,12 +106,24 @@ def create_app() -> FastAPI:
         logger.exception("Unhandled error on %s", request.url.path)
         return JSONResponse(status_code=500, content={"detail": "服务器内部错误"})
 
-    # Serve frontend static build if present
+    # Serve frontend static build if present (includes PWA assets)
     static_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if static_dir.is_dir():
         assets = static_dir / "assets"
         if assets.is_dir():
             app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
+        def _static_headers(full_path: str) -> dict[str, str] | None:
+            """PWA service worker / manifest cache headers."""
+            name = full_path.rsplit("/", 1)[-1]
+            if name == "sw.js" or name.startswith("workbox-"):
+                return {
+                    "Service-Worker-Allowed": "/",
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                }
+            if name.endswith(".webmanifest") or name == "manifest.webmanifest":
+                return {"Cache-Control": "no-cache"}
+            return None
 
         @app.get("/{full_path:path}")
         async def spa(full_path: str):
@@ -119,7 +131,8 @@ def create_app() -> FastAPI:
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
             file_path = static_dir / full_path
             if full_path and file_path.is_file():
-                return FileResponse(file_path)
+                headers = _static_headers(full_path)
+                return FileResponse(file_path, headers=headers)
             index = static_dir / "index.html"
             if index.is_file():
                 return FileResponse(index)
