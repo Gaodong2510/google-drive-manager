@@ -16,6 +16,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (theme === "dark") root.classList.add("dark");
     else root.classList.remove("dark");
     localStorage.setItem("gdm_theme", theme);
+    // Keep body/WebView backdrop in sync (inline FOUC styles + Android WebView)
+    document.body.style.backgroundColor = theme === "dark" ? "#0b1220" : "#f1f5f9";
+    document.body.style.color = theme === "dark" ? "#e2e8f0" : "#1e293b";
+    const meta = document.querySelector('meta[name="theme-color"]:not([media])');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#0f172a" : "#f1f5f9");
+    // Notify Android WebView shell to recolor chrome (status/nav/WebView bg)
+    try {
+      const bridge = (window as unknown as { CB?: { setNativeChrome?: (n: number) => void } }).CB;
+      bridge?.setNativeChrome?.(theme === "dark" ? 1 : 0);
+    } catch {
+      /* ignore */
+    }
   }, [theme]);
 
   return (

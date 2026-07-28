@@ -4,10 +4,9 @@
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#0B1220"
+    android:background="@color/gdm_window_bg"
     android:fitsSystemWindows="false">
 
-    <!-- Fullscreen panel -->
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
         android:id="@+id/swipe"
         android:layout_width="match_parent"
@@ -18,15 +17,14 @@
             android:id="@+id/webview"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="#0B1220" />
+            android:background="@color/gdm_window_bg" />
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
-    <!-- Loading overlay (avoids white flash) -->
     <LinearLayout
         android:id="@+id/loading"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#0B1220"
+        android:background="@color/gdm_window_bg"
         android:gravity="center"
         android:orientation="vertical"
         android:visibility="gone">
@@ -35,7 +33,7 @@
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:indeterminate="true"
-            android:indeterminateTint="#38BDF8" />
+            android:indeterminateTint="@color/gdm_progress" />
 
         <TextView
             android:id="@+id/loadingText"
@@ -43,11 +41,10 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
             android:text="@string/loading"
-            android:textColor="#94A3B8"
+            android:textColor="@color/gdm_muted"
             android:textSize="14sp" />
     </LinearLayout>
 
-    <!-- Thin top progress -->
     <ProgressBar
         android:id="@+id/progress"
         style="?android:attr/progressBarStyleHorizontal"
@@ -56,11 +53,10 @@
         android:layout_gravity="top"
         android:max="100"
         android:progress="0"
-        android:progressTint="#38BDF8"
-        android:progressBackgroundTint="#1E293B"
+        android:progressBackgroundTint="@color/gdm_card_stroke"
+        android:progressTint="@color/gdm_progress"
         android:visibility="gone" />
 
-    <!-- Floating menu -->
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabMenu"
         android:layout_width="wrap_content"
@@ -69,18 +65,18 @@
         android:layout_margin="18dp"
         android:contentDescription="@string/menu_settings"
         android:visibility="gone"
-        app:backgroundTint="#1E293B"
+        app:backgroundTint="@color/gdm_fab"
         app:borderWidth="0dp"
         app:elevation="6dp"
         app:fabSize="mini"
         app:srcCompat="@android:drawable/ic_menu_manage"
-        app:tint="#E2E8F0" />
+        app:tint="@color/gdm_fab_icon" />
 
-    <!-- First-run / change server -->
     <ScrollView
         android:id="@+id/setup"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:background="@color/gdm_window_bg"
         android:fillViewport="true"
         android:visibility="visible">
 
@@ -106,7 +102,7 @@
                 android:layout_marginTop="20dp"
                 android:letterSpacing="0.04"
                 android:text="@string/brand_title"
-                android:textColor="#F8FAFC"
+                android:textColor="@color/gdm_text"
                 android:textSize="28sp"
                 android:textStyle="bold" />
 
@@ -115,17 +111,17 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:text="@string/brand_subtitle"
-                android:textColor="#94A3B8"
+                android:textColor="@color/gdm_muted"
                 android:textSize="14sp" />
 
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="36dp"
-                app:cardBackgroundColor="#111827"
+                app:cardBackgroundColor="@color/gdm_card"
                 app:cardCornerRadius="20dp"
                 app:cardElevation="0dp"
-                app:strokeColor="#1E293B"
+                app:strokeColor="@color/gdm_card_stroke"
                 app:strokeWidth="1dp">
 
                 <LinearLayout
@@ -138,7 +134,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/setup_heading"
-                        android:textColor="#F1F5F9"
+                        android:textColor="@color/gdm_text"
                         android:textSize="16sp"
                         android:textStyle="bold" />
 
@@ -148,7 +144,7 @@
                         android:layout_marginTop="8dp"
                         android:lineSpacingExtra="3dp"
                         android:text="@string/setup_desc"
-                        android:textColor="#94A3B8"
+                        android:textColor="@color/gdm_muted"
                         android:textSize="13sp" />
 
                     <TextView
@@ -157,7 +153,7 @@
                         android:layout_marginTop="20dp"
                         android:text="@string/server_url_title"
                         android:textAllCaps="true"
-                        android:textColor="#64748B"
+                        android:textColor="@color/gdm_muted"
                         android:textSize="11sp"
                         android:textStyle="bold" />
 
@@ -165,12 +161,13 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
+                        app:boxBackgroundColor="@color/gdm_input_bg"
                         app:boxBackgroundMode="outline"
                         app:boxCornerRadiusBottomEnd="14dp"
                         app:boxCornerRadiusBottomStart="14dp"
                         app:boxCornerRadiusTopEnd="14dp"
                         app:boxCornerRadiusTopStart="14dp"
-                        app:boxStrokeColor="#334155"
+                        app:boxStrokeColor="@color/gdm_card_stroke"
                         app:hintEnabled="false">
 
                         <com.google.android.material.textfield.TextInputEditText
@@ -180,8 +177,8 @@
                             android:hint="@string/server_url_hint"
                             android:inputType="textUri"
                             android:padding="14dp"
-                            android:textColor="#F8FAFC"
-                            android:textColorHint="#64748B"
+                            android:textColor="@color/gdm_text"
+                            android:textColorHint="@color/gdm_muted"
                             android:textSize="15sp" />
                     </com.google.android.material.textfield.TextInputLayout>
 
@@ -204,7 +201,7 @@
                         android:layout_marginTop="4dp"
                         android:text="@string/cancel_setup"
                         android:textAllCaps="false"
-                        android:textColor="#64748B"
+                        android:textColor="@color/gdm_muted"
                         android:visibility="gone" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
@@ -216,7 +213,7 @@
                 android:gravity="center"
                 android:lineSpacingExtra="4dp"
                 android:text="@string/setup_footer"
-                android:textColor="#475569"
+                android:textColor="@color/gdm_muted"
                 android:textSize="12sp" />
         </LinearLayout>
     </ScrollView>

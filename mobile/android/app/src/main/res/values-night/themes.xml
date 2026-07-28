@@ -4,18 +4,18 @@
         <item name="android:windowBackground">@color/gdm_window_bg</item>
         <item name="android:statusBarColor">@color/gdm_window_bg</item>
         <item name="android:navigationBarColor">@color/gdm_window_bg</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 
     <style name="Theme.CloudBridge" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">#0EA5E9</item>
         <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="colorPrimaryContainer">#E0F2FE</item>
+        <item name="colorPrimaryContainer">#0C4A6E</item>
         <item name="colorSecondary">#6366F1</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@color/gdm_window_bg</item>
         <item name="android:windowBackground">@color/gdm_window_bg</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:enforceNavigationBarContrast">false</item>
         <item name="android:enforceStatusBarContrast">false</item>

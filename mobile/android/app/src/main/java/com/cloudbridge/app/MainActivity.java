@@ -88,9 +88,11 @@ public class MainActivity extends AppCompatActivity {
         fabMenu = findViewById(R.id.fabMenu);
         cancelSetupBtn = findViewById(R.id.cancelSetupBtn);
 
-        // Dark WebView — prevent white flash while page paints
-        webView.setBackgroundColor(0xFF0B1220);
+        // Match system day/night so light theme is not backed by solid black
+        int windowBg = getColorCompat(R.color.gdm_window_bg);
+        webView.setBackgroundColor(windowBg);
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        findViewById(R.id.root).setBackgroundColor(windowBg);
 
         ViewCompat.setOnApplyWindowInsetsListener(setup, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -198,6 +200,16 @@ public class MainActivity extends AppCompatActivity {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
+    private int getColorCompat(int resId) {
+        return getResources().getColor(resId, getTheme());
+    }
+
+    private boolean isNightMode() {
+        int mask = getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        return mask == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    }
+
     private void showLoading(boolean show) {
         if (loading == null) return;
         loading.setVisibility(show ? View.VISIBLE : View.GONE);
@@ -222,13 +234,34 @@ public class MainActivity extends AppCompatActivity {
         float density = getResources().getDisplayMetrics().density;
         int cssPx = Math.round(px / density); // convert to CSS px roughly via density
         // Actually WebView uses CSS pixels ≈ density-independent; pass physical/density
+        // Also sync WebView chrome with page theme after first paint
         String js =
-                "(function(){var d=document.documentElement;"
+                "(function(){"
+                        + "var d=document.documentElement;"
                         + "d.style.setProperty('--gdm-sat','"
                         + (px / density)
                         + "px');"
+                        + "var dark=d.classList.contains('dark');"
+                        + "if(window.CB&&CB.setNativeChrome){CB.setNativeChrome(dark?1:0);}"
                         + "})();";
         view.evaluateJavascript(js, null);
+    }
+
+    /** Called from page JS when user toggles light/dark in the panel. */
+    private void applyNativeChrome(boolean dark) {
+        int bg = dark ? 0xFF0B1220 : 0xFFF1F5F9;
+        webView.setBackgroundColor(bg);
+        findViewById(R.id.root).setBackgroundColor(bg);
+        if (loading != null) loading.setBackgroundColor(bg);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            getWindow().setNavigationBarColor(bg);
+        }
+        WindowInsetsControllerCompat c =
+                WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+        if (c != null) {
+            c.setAppearanceLightStatusBars(!dark);
+            c.setAppearanceLightNavigationBars(!dark);
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -361,6 +394,11 @@ public class MainActivity extends AppCompatActivity {
                             else showSetup(null, false);
                         });
                     }
+
+                    @android.webkit.JavascriptInterface
+                    public void setNativeChrome(int dark) {
+                        runOnUiThread(() -> applyNativeChrome(dark == 1));
+                    }
                 },
                 "CB");
     }
@@ -369,20 +407,50 @@ public class MainActivity extends AppCompatActivity {
         String safeUrl = url == null ? "" : url.replace("&", "&amp;").replace("'", "&#39;");
         String safeDetail =
                 detail == null ? "" : detail.replace("&", "&amp;").replace("<", "&lt;");
+        boolean night = isNightMode();
+        String bg = night ? "#0b1220" : "#f1f5f9";
+        String card = night ? "#111827" : "#ffffff";
+        String border = night ? "#1e293b" : "#e2e8f0";
+        String text = night ? "#e2e8f0" : "#1e293b";
+        String muted = night ? "#94a3b8" : "#64748b";
+        String codeBg = night ? "#0f172a" : "#f8fafc";
+        String codeFg = night ? "#7dd3fc" : "#0369a1";
+        String secBtn = night ? "#1e293b" : "#e2e8f0";
+        String secFg = night ? "#cbd5e1" : "#334155";
         String html =
                 "<!DOCTYPE html><html><head><meta charset='utf-8'/>"
                         + "<meta name='viewport' content='width=device-width,initial-scale=1'/>"
                         + "<style>"
-                        + "body{margin:0;font-family:sans-serif;background:#0b1220;color:#e2e8f0;"
+                        + "body{margin:0;font-family:sans-serif;background:"
+                        + bg
+                        + ";color:"
+                        + text
+                        + ";"
                         + "display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;}"
-                        + ".card{max-width:420px;background:#111827;border:1px solid #1e293b;border-radius:20px;padding:28px;}"
-                        + "h1{font-size:20px;margin:0 0 8px;}p{color:#94a3b8;font-size:14px;line-height:1.55;}"
-                        + "code{display:block;background:#0f172a;padding:10px;border-radius:10px;font-size:12px;"
-                        + "word-break:break-all;margin:12px 0;color:#7dd3fc;}"
-                        + ".hint{font-size:12px;color:#64748b;margin-top:8px;}"
+                        + ".card{max-width:420px;background:"
+                        + card
+                        + ";border:1px solid "
+                        + border
+                        + ";border-radius:20px;padding:28px;}"
+                        + "h1{font-size:20px;margin:0 0 8px;}p{color:"
+                        + muted
+                        + ";font-size:14px;line-height:1.55;}"
+                        + "code{display:block;background:"
+                        + codeBg
+                        + ";padding:10px;border-radius:10px;font-size:12px;"
+                        + "word-break:break-all;margin:12px 0;color:"
+                        + codeFg
+                        + ";}"
+                        + ".hint{font-size:12px;color:"
+                        + muted
+                        + ";margin-top:8px;}"
                         + "button{width:100%;margin-top:10px;padding:14px;border:0;border-radius:12px;"
                         + "background:#0ea5e9;color:#fff;font-size:15px;font-weight:600;}"
-                        + "button.secondary{background:#1e293b;color:#cbd5e1;}"
+                        + "button.secondary{background:"
+                        + secBtn
+                        + ";color:"
+                        + secFg
+                        + ";}"
                         + "</style></head><body><div class='card'>"
                         + "<h1>无法打开面板</h1>"
                         + "<p>请检查你填写的服务器地址是否正确，以及手机网络是否能访问该服务器。"

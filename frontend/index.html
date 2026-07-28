@@ -20,7 +20,17 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   </head>
-  <body style="margin:0;background:#0b1220;color:#e2e8f0">
+  <style>
+    /* Avoid FOUC; respect system theme until React hydrates */
+    html, body { margin: 0; min-height: 100%; }
+    body { background: #f1f5f9; color: #1e293b; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0b1220; color: #e2e8f0; }
+    }
+    html.dark body { background: #0b1220 !important; color: #e2e8f0 !important; }
+    html:not(.dark) body { background: #f1f5f9 !important; color: #1e293b !important; }
+  </style>
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

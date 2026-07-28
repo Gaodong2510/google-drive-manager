@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="gdm_window_bg">#F1F5F9</color>
+    <color name="gdm_surface">#FFFFFF</color>
+    <color name="gdm_text">#1E293B</color>
+    <color name="gdm_muted">#64748B</color>
+    <color name="gdm_card">#FFFFFF</color>
+    <color name="gdm_card_stroke">#E2E8F0</color>
+    <color name="gdm_input_bg">#F8FAFC</color>
+    <color name="gdm_fab">#E2E8F0</color>
+    <color name="gdm_fab_icon">#334155</color>
+    <color name="gdm_progress">#0EA5E9</color>
+</resources>
