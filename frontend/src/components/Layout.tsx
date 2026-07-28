@@ -51,8 +51,9 @@ export default function Layout() {
           "fixed inset-y-0 left-0 z-40 flex w-[260px] transform flex-col border-r border-slate-200 bg-white transition-transform dark:border-slate-800 dark:bg-slate-900 lg:static lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full"
         )}
+        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
       >
-        <div className="flex h-16 items-center gap-3 border-b border-slate-200/80 px-5 dark:border-slate-800/80">
+        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-slate-200/80 px-5 dark:border-slate-800/80">
           <AppLogo size={38} />
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-bold tracking-tight">
@@ -131,19 +132,35 @@ export default function Layout() {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="glass sticky top-0 z-20 flex h-16 items-center gap-3 border-b px-4 md:px-6">
-          <button className="btn-ghost !p-2 lg:hidden" onClick={() => setOpen(true)}>
-            <Menu size={18} />
-          </button>
-          <div className="hidden min-w-0 sm:block">
-            <div className="text-sm font-medium text-slate-700 dark:text-slate-200">云盘挂载管理</div>
-            <div className="text-[11px] text-slate-400">{APP_SUBTITLE}</div>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
+        {/*
+          Top safe-area keeps the menu button below the system clock / status bar
+          (critical in Android WebView & notch devices with viewport-fit=cover).
+        */}
+        <header
+          className="glass sticky top-0 z-20 border-b"
+          style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+        >
+          <div className="flex h-14 items-center gap-2 px-3 sm:h-16 sm:gap-3 sm:px-6">
             <button
-              className="btn-ghost !p-2.5"
+              type="button"
+              className="btn-ghost !min-h-[44px] !min-w-[44px] !rounded-xl !p-2.5 lg:hidden"
+              onClick={() => setOpen(true)}
+              aria-label="打开菜单"
+            >
+              <Menu size={20} />
+            </button>
+            <div className="min-w-0 flex-1 sm:block">
+              <div className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">
+                云盘挂载管理
+              </div>
+              <div className="hidden truncate text-[11px] text-slate-400 sm:block">{APP_SUBTITLE}</div>
+            </div>
+            <button
+              type="button"
+              className="btn-ghost !min-h-[44px] !min-w-[44px] !rounded-xl !p-2.5"
               onClick={toggle}
               title={theme === "dark" ? "切换浅色" : "切换深色"}
+              aria-label="切换主题"
             >
               {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </button>

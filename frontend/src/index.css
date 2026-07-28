@@ -28,6 +28,14 @@ body,
   min-height: 100%;
 }
 
+/* Mobile / WebView: respect notch & status bar (clock area) */
+@supports (padding: env(safe-area-inset-top)) {
+  :root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+  }
+}
+
 body {
   @apply text-slate-800 antialiased;
   background:

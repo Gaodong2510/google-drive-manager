@@ -101,9 +101,10 @@ public class MainActivity extends AppCompatActivity {
                     bars.bottom + dp(16));
             return insets;
         });
+        // Keep FAB near bottom (above nav bar / gesture area), never near status clock
         ViewCompat.setOnApplyWindowInsetsListener(fabMenu, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            applyFabMargin(v, bars.bottom + dp(18), bars.right + dp(12));
+            applyFabMargin(v, Math.max(bars.bottom, dp(12)) + dp(20), Math.max(bars.right, dp(8)) + dp(16));
             return insets;
         });
 
