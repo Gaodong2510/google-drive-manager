@@ -2,9 +2,10 @@ plugins {
     id "com.android.application"
 }
 
-// Never bake a fixed public server into the store/sideload APK.
-// Each user enters their own panel URL on first launch.
-def serverUrl = (project.findProperty("SERVER_URL") ?: System.getenv("SERVER_URL") ?: "").toString()
+// SUGGESTED_URL = HTTPS panel shown as default (user can change for their own deploy).
+def suggestedUrl = (project.findProperty("SUGGESTED_URL")
+        ?: System.getenv("SUGGESTED_URL")
+        ?: "https://drive.dongwen.cc").toString()
 
 android {
     namespace "com.cloudbridge.app"
@@ -14,9 +15,9 @@ android {
         applicationId "com.cloudbridge.app"
         minSdk 26
         targetSdk 35
-        versionCode 5
-        versionName "1.2.2"
-        buildConfigField "String", "DEFAULT_SERVER_URL", "\"${serverUrl.replace("\"", "\\\"")}\""
+        versionCode 6
+        versionName "1.3.0"
+        buildConfigField "String", "SUGGESTED_URL", "\"${suggestedUrl.replace("\"", "\\\"")}\""
         resValue "string", "app_name", "云桥"
     }
 

@@ -8,15 +8,15 @@ export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
 export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
 export PATH="$JAVA_HOME/bin:${ANDROID_HOME}/build-tools/35.0.0:$PATH"
 
-# Empty by default — users enter their own panel URL in the app.
-SERVER_URL="${SERVER_URL:-}"
+# Suggested HTTPS domain prefilled in the connect screen (user can change).
+SUGGESTED_URL="${SUGGESTED_URL:-https://drive.dongwen.cc}"
 
-echo "Building CloudBridge APK  SERVER_URL=${SERVER_URL:-(empty, first-run setup)}"
+echo "Building CloudBridge APK  SUGGESTED_URL=$SUGGESTED_URL"
 echo "sdk.dir=$ANDROID_HOME" > "$ANDROID_DIR/local.properties"
 
 cd "$ANDROID_DIR"
 chmod +x gradlew
-./gradlew :app:assembleRelease -PSERVER_URL="$SERVER_URL"
+./gradlew :app:assembleRelease -PSUGGESTED_URL="$SUGGESTED_URL"
 
 UNSIGNED="$ANDROID_DIR/app/build/outputs/apk/release/app-release-unsigned.apk"
 KEYSTORE="$ANDROID_DIR/cloudbridge-release.jks"
