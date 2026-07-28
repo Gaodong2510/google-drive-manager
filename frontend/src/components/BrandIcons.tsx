@@ -1,4 +1,4 @@
-/** Official-style brand SVGs for cloud providers and the GDM product mark. */
+/** Brand SVGs: cloud providers + CloudBridge product mark. */
 
 import clsx from "clsx";
 
@@ -10,13 +10,7 @@ type IconProps = {
 /** Google Drive colored triangle logo */
 export function GoogleDriveIcon({ className, size = 20 }: IconProps) {
   return (
-    <svg
-      viewBox="0 0 87.3 78"
-      width={size}
-      height={size}
-      className={className}
-      aria-hidden
-    >
+    <svg viewBox="0 0 87.3 78" width={size} height={size} className={className} aria-hidden>
       <path
         d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z"
         fill="#0066da"
@@ -48,14 +42,7 @@ export function GoogleDriveIcon({ className, size = 20 }: IconProps) {
 /** Microsoft OneDrive cloud logo */
 export function OneDriveIcon({ className, size = 20 }: IconProps) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      width={size}
-      height={size}
-      className={className}
-      aria-hidden
-      fill="none"
-    >
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className} aria-hidden fill="none">
       <path
         d="M18.5 18.5H7.25C4.35 18.5 2 16.15 2 13.25c0-2.55 1.85-4.7 4.3-5.15C7.05 5.45 9.35 3.5 12.1 3.5c2.55 0 4.75 1.65 5.55 3.95 2.3.35 4.1 2.35 4.1 4.75 0 2.65-2.15 4.8-4.75 4.8z"
         fill="#0078D4"
@@ -73,39 +60,79 @@ export function OneDriveIcon({ className, size = 20 }: IconProps) {
   );
 }
 
-/** Product mark: stylized drive/mount glyph */
-export function GdmLogo({ className, size = 28 }: IconProps) {
+/**
+ * CloudBridge product mark — cloud linked to local mount (bridge).
+ * Unique gradient ids so multiple instances on one page don't clash.
+ */
+export function AppLogo({ className, size = 28 }: IconProps) {
+  const uid = `cb${size}`;
   return (
-    <svg
-      viewBox="0 0 40 40"
-      width={size}
-      height={size}
-      className={className}
-      aria-hidden
-    >
+    <svg viewBox="0 0 48 48" width={size} height={size} className={className} aria-hidden>
       <defs>
-        <linearGradient id="gdm-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#3b82f6" />
-          <stop offset="55%" stopColor="#6366f1" />
-          <stop offset="100%" stopColor="#8b5cf6" />
+        <linearGradient id={`${uid}-bg`} x1="8%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#0ea5e9" />
+          <stop offset="45%" stopColor="#3b82f6" />
+          <stop offset="100%" stopColor="#6366f1" />
         </linearGradient>
+        <linearGradient id={`${uid}-shine`} x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.22" />
+          <stop offset="55%" stopColor="#ffffff" stopOpacity="0" />
+        </linearGradient>
+        <filter id={`${uid}-soft`} x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1" stdDeviation="1.2" floodColor="#0f172a" floodOpacity="0.18" />
+        </filter>
       </defs>
-      <rect width="40" height="40" rx="11" fill="url(#gdm-grad)" />
-      <path
-        d="M11 24.5c0-1.4.5-2.6 1.4-3.5.9-.9 2.1-1.4 3.5-1.4h1.1c.4-2.4 2.5-4.2 5-4.2 2.8 0 5 2.2 5 5 1.9.2 3.5 1.8 3.5 3.8 0 2.1-1.7 3.8-3.8 3.8H15.8c-2.6 0-4.8-2.1-4.8-4.5z"
-        fill="white"
-        fillOpacity="0.95"
+
+      {/* App tile */}
+      <rect width="48" height="48" rx="13" fill={`url(#${uid}-bg)`} />
+      <rect width="48" height="48" rx="13" fill={`url(#${uid}-shine)`} />
+
+      {/* Soft inner frame */}
+      <rect
+        x="1.25"
+        y="1.25"
+        width="45.5"
+        height="45.5"
+        rx="11.75"
+        fill="none"
+        stroke="white"
+        strokeOpacity="0.18"
+        strokeWidth="1"
       />
+
+      {/* Cloud (top) */}
+      <g filter={`url(#${uid}-soft)`} fill="white" fillOpacity="0.96">
+        <ellipse cx="18.5" cy="18.5" rx="5.2" ry="4.6" />
+        <ellipse cx="24.5" cy="16.2" rx="6.4" ry="5.5" />
+        <ellipse cx="30.2" cy="18.8" rx="5" ry="4.4" />
+        <rect x="14.2" y="18.2" width="19.6" height="6.2" rx="3.1" />
+      </g>
+
+      {/* Bridge arc: cloud → local */}
       <path
-        d="M14 27.5h12"
-        stroke="url(#gdm-grad)"
+        d="M24 25.5 C24 29.5 24 31.5 24 34"
+        fill="none"
+        stroke="white"
+        strokeOpacity="0.55"
         strokeWidth="1.6"
         strokeLinecap="round"
-        opacity="0.35"
+        strokeDasharray="0.1 3.2"
       />
+
+      {/* Local mount / disk stack */}
+      <g fill="white">
+        <ellipse cx="24" cy="35.2" rx="9.2" ry="2.6" fillOpacity="0.35" />
+        <ellipse cx="24" cy="34.2" rx="9.2" ry="2.6" fillOpacity="0.55" />
+        <ellipse cx="24" cy="33.2" rx="9.2" ry="2.6" fillOpacity="0.95" />
+        {/* center hub */}
+        <circle cx="24" cy="33.2" r="1.35" fill={`url(#${uid}-bg)`} fillOpacity="0.9" />
+      </g>
     </svg>
   );
 }
+
+/** @deprecated use AppLogo */
+export const GdmLogo = AppLogo;
 
 export function ProviderIcon({
   provider,

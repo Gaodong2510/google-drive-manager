@@ -17,9 +17,9 @@ export default defineConfig({
         "icons/maskable-512.png",
       ],
       manifest: {
-        name: "GDM · Cloud Drive Manager",
-        short_name: "GDM",
-        description: "Google Drive / OneDrive 挂载管理面板 · rclone VFS",
+        name: "云桥 CloudBridge",
+        short_name: "云桥",
+        description: "云盘挂载管理 · Google Drive / OneDrive · rclone VFS",
         lang: "zh-CN",
         dir: "ltr",
         id: "/",

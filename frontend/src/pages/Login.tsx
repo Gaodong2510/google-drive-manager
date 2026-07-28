@@ -3,7 +3,8 @@ import { Navigate, useNavigate } from "react-router-dom";
 import { Loader2, Lock, User } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { Alert } from "../components/ui";
-import { GdmLogo } from "../components/BrandIcons";
+import { AppLogo } from "../components/BrandIcons";
+import { APP_DESCRIPTION, APP_NAME, APP_NAME_EN } from "../lib/brand";
 
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
@@ -42,12 +43,13 @@ export default function LoginPage() {
         <div className="card-solid !p-8 shadow-xl">
           <div className="mb-8 text-center">
             <div className="mx-auto mb-4 inline-flex">
-              <GdmLogo size={56} />
+              <AppLogo size={64} />
             </div>
-            <h1 className="text-2xl font-bold tracking-tight">Cloud Drive Manager</h1>
-            <p className="mt-2 text-sm text-slate-500">
-              稳定挂载 · 媒体服务器友好 · 生产级管理面板
-            </p>
+            <h1 className="text-2xl font-bold tracking-tight">
+              {APP_NAME}
+              <span className="ml-2 text-lg font-semibold text-slate-400">{APP_NAME_EN}</span>
+            </h1>
+            <p className="mt-2 text-sm text-slate-500">{APP_DESCRIPTION}</p>
           </div>
           <form onSubmit={onSubmit} className="space-y-4">
             {error && <Alert type="error">{error}</Alert>}

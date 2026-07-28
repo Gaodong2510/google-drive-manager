@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
     ensure_admin_user()
     db = SessionLocal()
     try:
-        log_task(db, task_type="system", status="info", message=f"Google Drive Manager v{__version__} 启动")
+        log_task(db, task_type="system", status="info", message=f"云桥 CloudBridge v{__version__} 启动")
     finally:
         db.close()
     # Restore mounts then start watchdog

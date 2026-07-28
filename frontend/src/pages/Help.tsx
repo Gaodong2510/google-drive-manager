@@ -190,7 +190,7 @@ export default function HelpPage() {
                   </li>
                 </ol>
               </Step>
-              <Step n={2} title="填入 GDM 系统设置">
+              <Step n={2} title="填入云桥系统设置">
                 <p>
                   <Link className="text-brand-600 underline" to="/settings">
                     系统设置
@@ -484,7 +484,7 @@ systemctl stop google-drive-manager`}</Pre>
           </Section>
 
           <div className="card text-center text-xs text-slate-400">
-            Google Drive Manager 帮助文档 · 可在左侧菜单随时打开「使用帮助」
+            云桥 CloudBridge 帮助文档 · 可在左侧菜单随时打开「使用帮助」
           </div>
         </div>
       </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Download, X } from "lucide-react";
+import { APP_NAME } from "../lib/brand";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -69,10 +70,10 @@ export default function PwaInstall() {
           <Download size={16} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">安装 GDM 到主屏幕</div>
+          <div className="text-sm font-semibold">安装 {APP_NAME} 到主屏幕</div>
           <p className="mt-0.5 text-xs leading-relaxed text-slate-500">
             {deferred
-              ? "像 App 一样全屏使用，方便随时管理云盘挂载。"
+              ? "像 App 一样全屏使用，随时管理云盘挂载。"
               : "在 Safari 点分享 →「添加到主屏幕」即可安装。"}
           </p>
           <div className="mt-2 flex flex-wrap gap-2">

@@ -19,8 +19,9 @@ import {
 import { useState } from "react";
 import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
-import { GdmLogo } from "./BrandIcons";
+import { AppLogo } from "./BrandIcons";
 import PwaInstall from "./PwaInstall";
+import { APP_NAME, APP_NAME_EN, APP_SUBTITLE } from "../lib/brand";
 import clsx from "clsx";
 
 const nav = [
@@ -52,10 +53,13 @@ export default function Layout() {
         )}
       >
         <div className="flex h-16 items-center gap-3 border-b border-slate-200/80 px-5 dark:border-slate-800/80">
-          <GdmLogo size={36} />
+          <AppLogo size={38} />
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-bold tracking-tight">GDM</div>
-            <div className="truncate text-[11px] text-slate-400">Cloud Drive Manager</div>
+            <div className="truncate text-sm font-bold tracking-tight">
+              {APP_NAME}
+              <span className="ml-1.5 text-[11px] font-medium text-slate-400">{APP_NAME_EN}</span>
+            </div>
+            <div className="truncate text-[11px] text-slate-400">{APP_SUBTITLE}</div>
           </div>
           <button
             className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 lg:hidden"
@@ -132,10 +136,8 @@ export default function Layout() {
             <Menu size={18} />
           </button>
           <div className="hidden min-w-0 sm:block">
-            <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
-              云盘挂载管理面板
-            </div>
-            <div className="text-[11px] text-slate-400">Google Drive · OneDrive · rclone VFS</div>
+            <div className="text-sm font-medium text-slate-700 dark:text-slate-200">云盘挂载管理</div>
+            <div className="text-[11px] text-slate-400">{APP_SUBTITLE}</div>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button

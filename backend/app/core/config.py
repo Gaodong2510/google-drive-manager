@@ -21,7 +21,7 @@ def _default_data_dir() -> Path:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GDM_", env_file=".env", extra="ignore")
 
-    app_name: str = "Google Drive Manager"
+    app_name: str = "云桥 CloudBridge"
     app_version: str = "1.0.0"
     debug: bool = False
     host: str = "0.0.0.0"

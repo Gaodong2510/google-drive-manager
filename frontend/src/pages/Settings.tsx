@@ -207,7 +207,7 @@ export default function SettingsPage() {
     <div>
       <PageHeader
         title="系统设置"
-        desc={`GDM v${s.app_version} · 当前用户 ${user?.username || "—"}`}
+        desc={`云桥 v${s.app_version} · 当前用户 ${user?.username || "—"}`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Link to="/help#connect" className="btn-secondary">
