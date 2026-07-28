@@ -1,30 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#0B1220"
-    android:orientation="vertical">
+    android:fitsSystemWindows="false">
 
-    <com.google.android.material.appbar.MaterialToolbar
-        android:id="@+id/toolbar"
-        android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
-        android:background="#0F172A"
-        app:title="@string/app_name"
-        app:titleTextColor="#F8FAFC"
-        app:menu="@menu/main_menu" />
-
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1">
-
+    <!-- Fullscreen panel -->
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
         android:id="@+id/swipe"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        android:visibility="gone">
 
         <WebView
             android:id="@+id/webview"
@@ -32,74 +20,176 @@
             android:layout_height="match_parent" />
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
+    <!-- Thin top progress -->
     <ProgressBar
         android:id="@+id/progress"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
-        android:layout_height="3dp"
+        android:layout_height="2dp"
         android:layout_gravity="top"
         android:indeterminate="true"
+        android:progressTint="#38BDF8"
         android:visibility="gone" />
 
-    <LinearLayout
+    <!-- Floating menu (no title bar) -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabMenu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="18dp"
+        android:contentDescription="@string/menu_settings"
+        android:visibility="gone"
+        app:backgroundTint="#1E293B"
+        app:borderWidth="0dp"
+        app:elevation="6dp"
+        app:fabSize="mini"
+        app:srcCompat="@android:drawable/ic_menu_manage"
+        app:tint="#E2E8F0" />
+
+    <!-- First-run / change server -->
+    <ScrollView
         android:id="@+id/setup"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:padding="28dp"
-        android:visibility="gone">
+        android:fillViewport="true"
+        android:visibility="visible">
 
-        <ImageView
-            android:layout_width="72dp"
-            android:layout_height="72dp"
-            android:contentDescription="@string/app_name"
-            android:src="@drawable/ic_launcher" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/app_name"
-            android:textColor="#F8FAFC"
-            android:textSize="24sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="CloudBridge"
-            android:textColor="#94A3B8"
-            android:textSize="14sp" />
-
-        <TextView
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:text="@string/server_url_title"
-            android:textColor="#CBD5E1"
-            android:textSize="13sp" />
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:paddingHorizontal="24dp"
+            android:paddingTop="72dp"
+            android:paddingBottom="40dp">
 
-        <EditText
-            android:id="@+id/serverUrl"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:background="@android:drawable/edit_text"
-            android:hint="@string/server_url_hint"
-            android:inputType="textUri"
-            android:padding="14dp"
-            android:textColor="#0F172A"
-            android:textColorHint="#94A3B8"
-            android:textSize="15sp" />
+            <ImageView
+                android:layout_width="88dp"
+                android:layout_height="88dp"
+                android:contentDescription="@string/app_name"
+                android:elevation="8dp"
+                android:src="@drawable/ic_launcher" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/saveBtn"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/save_and_open" />
-    </LinearLayout>
-    </FrameLayout>
-</LinearLayout>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:letterSpacing="0.04"
+                android:text="@string/brand_title"
+                android:textColor="#F8FAFC"
+                android:textSize="28sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/brand_subtitle"
+                android:textColor="#94A3B8"
+                android:textSize="14sp" />
+
+            <!-- Card -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="36dp"
+                app:cardBackgroundColor="#111827"
+                app:cardCornerRadius="20dp"
+                app:cardElevation="0dp"
+                app:strokeColor="#1E293B"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="20dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/setup_heading"
+                        android:textColor="#F1F5F9"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:lineSpacingExtra="3dp"
+                        android:text="@string/setup_desc"
+                        android:textColor="#94A3B8"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="20dp"
+                        android:text="@string/server_url_title"
+                        android:textAllCaps="true"
+                        android:textColor="#64748B"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        app:boxBackgroundMode="outline"
+                        app:boxCornerRadiusBottomEnd="14dp"
+                        app:boxCornerRadiusBottomStart="14dp"
+                        app:boxCornerRadiusTopEnd="14dp"
+                        app:boxCornerRadiusTopStart="14dp"
+                        app:boxStrokeColor="#334155"
+                        app:hintEnabled="false">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/serverUrl"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:hint="@string/server_url_hint"
+                            android:inputType="textUri"
+                            android:padding="14dp"
+                            android:textColor="#F8FAFC"
+                            android:textColorHint="#64748B"
+                            android:textSize="15sp" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/saveBtn"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="16dp"
+                        android:text="@string/save_and_open"
+                        android:textAllCaps="false"
+                        android:textSize="15sp"
+                        app:backgroundTint="#0EA5E9"
+                        app:cornerRadius="14dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/cancelSetupBtn"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/cancel_setup"
+                        android:textAllCaps="false"
+                        android:textColor="#64748B"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:gravity="center"
+                android:lineSpacingExtra="4dp"
+                android:text="@string/setup_footer"
+                android:textColor="#475569"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>

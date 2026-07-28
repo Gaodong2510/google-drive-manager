@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.CloudBridge" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.CloudBridge" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">#0EA5E9</item>
-        <item name="colorPrimaryContainer">#0F172A</item>
-        <item name="android:statusBarColor">#0F172A</item>
-        <item name="android:navigationBarColor">#0F172A</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#0C4A6E</item>
+        <item name="colorSecondary">#6366F1</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">#0B1220</item>
         <item name="android:windowBackground">#0B1220</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
     </style>
 </resources>

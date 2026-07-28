@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">云桥</string>
-    <string name="server_url_title">服务器地址</string>
-    <string name="server_url_hint">例如 http://192.168.1.10:8787</string>
-    <string name="save_and_open">保存并打开</string>
+    <string name="brand_title">云桥</string>
+    <string name="brand_subtitle">CloudBridge · 自托管云盘挂载面板</string>
+    <string name="setup_heading">连接你的服务器</string>
+    <string name="setup_desc">本应用不会绑定任何公共账号。请填写你自己部署的云桥面板地址，或管理员提供给你的地址。</string>
+    <string name="server_url_title">面板地址</string>
+    <string name="server_url_hint">https://panel.example.com 或 http://192.168.1.10:8787</string>
+    <string name="save_and_open">进入面板</string>
+    <string name="cancel_setup">返回</string>
+    <string name="setup_footer">每个人 / 每台服务器使用自己的地址。\n数据与账号只存在于你填写的服务器上。</string>
+    <string name="menu_settings">设置</string>
+    <string name="menu_reload">刷新页面</string>
     <string name="menu_change_server">更换服务器</string>
-    <string name="menu_reload">刷新</string>
-    <string name="loading">加载中…</string>
-    <string name="load_error">无法连接服务器，请检查地址与网络</string>
+    <string name="menu_clear_cache">清除网页缓存</string>
+    <string name="load_error">无法连接，请检查地址、端口与网络</string>
+    <string name="url_required">请输入面板地址</string>
+    <string name="url_saved">已连接</string>
 </resources>

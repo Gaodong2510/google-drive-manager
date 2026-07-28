@@ -8,15 +8,10 @@ export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
 export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
 export PATH="$JAVA_HOME/bin:${ANDROID_HOME}/build-tools/35.0.0:$PATH"
 
-SERVER_URL="${SERVER_URL:-http://127.0.0.1:8787}"
-if [[ "$SERVER_URL" == "http://127.0.0.1:8787" ]]; then
-  IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  if [[ -n "${IP:-}" ]]; then
-    SERVER_URL="http://${IP}:8787"
-  fi
-fi
+# Empty by default — users enter their own panel URL in the app.
+SERVER_URL="${SERVER_URL:-}"
 
-echo "Building CloudBridge APK  SERVER_URL=$SERVER_URL"
+echo "Building CloudBridge APK  SERVER_URL=${SERVER_URL:-(empty, first-run setup)}"
 echo "sdk.dir=$ANDROID_HOME" > "$ANDROID_DIR/local.properties"
 
 cd "$ANDROID_DIR"
