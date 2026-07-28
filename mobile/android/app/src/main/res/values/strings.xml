@@ -6,7 +6,7 @@
     <string name="setup_heading">连接你的服务器</string>
     <string name="setup_desc">本应用不会绑定任何公共账号。请填写你自己部署的云桥面板地址，或管理员提供给你的地址。</string>
     <string name="server_url_title">面板地址</string>
-    <string name="server_url_hint">https://panel.example.com 或 http://192.168.1.10:8787</string>
+    <string name="server_url_hint">https://drive.example.com（推荐 HTTPS）</string>
     <string name="save_and_open">进入面板</string>
     <string name="cancel_setup">返回</string>
     <string name="setup_footer">每个人 / 每台服务器使用自己的地址。\n数据与账号只存在于你填写的服务器上。</string>

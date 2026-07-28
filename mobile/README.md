@@ -18,9 +18,13 @@
 
 ## 下载
 
+推荐 HTTPS 面板地址：
+
 ```text
-http://你的面板:8787/download/cloudbridge.apk
+https://你的域名/download/cloudbridge.apk
 ```
+
+（本机示例：`https://drive.dongwen.cc/download/cloudbridge.apk`）
 
 ## 编译
 
