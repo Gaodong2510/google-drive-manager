@@ -9,8 +9,11 @@ import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
@@ -20,7 +23,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.ProgressBar;
-import android.widget.TextView;
+import android.widget.ScrollView;
 import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
@@ -40,39 +43,46 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.textfield.TextInputEditText;
 
 /**
- * Generic WebView shell — no operator domain baked in.
- * Each self-hosted user enters their own panel URL on first launch.
+ * Generic WebView shell. No operator domain baked in.
+ * Loading uses a thin top bar only (no blocking full-screen overlay).
  */
 public class MainActivity extends AppCompatActivity {
     private static final String PREFS = "cloudbridge";
     private static final String KEY_URL = "server_url";
+    private static final long LOAD_TIMEOUT_MS = 20_000L;
 
     private WebView webView;
     private SwipeRefreshLayout swipe;
     private ProgressBar progress;
-    private View setup;
-    private View loading;
-    private TextView loadingText;
+    private ScrollView setup;
+    private View loading; // kept for layout id; never used as blocker
     private TextInputEditText serverUrl;
     private FloatingActionButton fabMenu;
     private MaterialButton cancelSetupBtn;
     private SharedPreferences prefs;
     private boolean hasServer;
     private String lastUrl = "";
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private Runnable loadTimeout;
+    private boolean pageReady;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // Switch from splash theme to main (keeps dark bg, no white flash)
         setTheme(R.style.Theme_CloudBridge);
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        // Soft keyboard: resize content via IME insets (edge-to-edge breaks default adjustResize)
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                | WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN);
+
+        boolean night = isNightMode();
         WindowInsetsControllerCompat c =
                 WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         if (c != null) {
-            c.setAppearanceLightStatusBars(false);
-            c.setAppearanceLightNavigationBars(false);
+            c.setAppearanceLightStatusBars(!night);
+            c.setAppearanceLightNavigationBars(!night);
         }
 
         setContentView(R.layout.activity_main);
@@ -83,56 +93,83 @@ public class MainActivity extends AppCompatActivity {
         progress = findViewById(R.id.progress);
         setup = findViewById(R.id.setup);
         loading = findViewById(R.id.loading);
-        loadingText = findViewById(R.id.loadingText);
         serverUrl = findViewById(R.id.serverUrl);
         fabMenu = findViewById(R.id.fabMenu);
         cancelSetupBtn = findViewById(R.id.cancelSetupBtn);
 
-        // Match system day/night so light theme is not backed by solid black
+        // Never block UI with full-screen loader
+        if (loading != null) loading.setVisibility(View.GONE);
+
         int windowBg = getColorCompat(R.color.gdm_window_bg);
         webView.setBackgroundColor(windowBg);
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         findViewById(R.id.root).setBackgroundColor(windowBg);
 
-        ViewCompat.setOnApplyWindowInsetsListener(setup, (v, insets) -> {
+        // System bars + IME so the URL field scrolls above the keyboard
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root), (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(
-                    v.getPaddingLeft(),
-                    bars.top + dp(24),
-                    v.getPaddingRight(),
-                    bars.bottom + dp(16));
-            return insets;
-        });
-        // Keep FAB near bottom (above nav bar / gesture area), never near status clock
-        ViewCompat.setOnApplyWindowInsetsListener(fabMenu, (v, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            applyFabMargin(v, Math.max(bars.bottom, dp(12)) + dp(20), Math.max(bars.right, dp(8)) + dp(16));
+            Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            int imeBottom = ime.bottom;
+
+            // Setup form padding
+            int setupTop = bars.top + dp(16);
+            int setupBottom = Math.max(bars.bottom, imeBottom) + dp(20);
+            setup.setPadding(setup.getPaddingLeft(), setupTop, setup.getPaddingRight(), setupBottom);
+
+            // FAB above nav / keyboard
+            applyFabMargin(
+                    fabMenu,
+                    Math.max(bars.bottom, imeBottom) + dp(16),
+                    Math.max(bars.right, dp(8)) + dp(12));
+
+            // When keyboard opens, scroll input into view
+            if (imeBottom > 0 && setup.getVisibility() == View.VISIBLE) {
+                setup.post(() -> {
+                    View card = findViewById(R.id.setupCard);
+                    if (card != null) {
+                        setup.smoothScrollTo(0, Math.max(0, card.getTop() - dp(24)));
+                    } else {
+                        setup.smoothScrollTo(0, serverUrl.getTop());
+                    }
+                });
+            }
             return insets;
         });
 
         configureWebView();
 
         swipe.setColorSchemeColors(0xFF0EA5E9, 0xFF6366F1);
-        swipe.setProgressBackgroundColorSchemeColor(0xFF1E293B);
+        swipe.setProgressBackgroundColorSchemeColor(
+                isNightMode() ? 0xFF1E293B : 0xFFE2E8F0);
         swipe.setOnRefreshListener(() -> {
-            if (lastUrl != null && !lastUrl.isEmpty() && !lastUrl.startsWith("data:")) {
-                openUrl(lastUrl);
-            } else {
-                webView.reload();
-            }
+            String u = prefs.getString(KEY_URL, lastUrl);
+            if (u != null && !u.isEmpty()) openUrl(u);
+            else webView.reload();
         });
 
         findViewById(R.id.saveBtn).setOnClickListener(v -> saveAndOpen());
         cancelSetupBtn.setOnClickListener(v -> {
+            hideKeyboard();
             if (hasServer) showBrowser();
         });
         fabMenu.setOnClickListener(v -> showMenu());
+
+        // Focus → ensure keyboard + scroll
+        serverUrl.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                v.postDelayed(() -> {
+                    ViewCompat.requestApplyInsets(findViewById(R.id.root));
+                    setup.smoothScrollTo(0, Math.max(0, findViewById(R.id.setupCard).getTop() - dp(16)));
+                }, 120);
+            }
+        });
 
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
                 if (setup.getVisibility() == View.VISIBLE) {
                     if (hasServer) {
+                        hideKeyboard();
                         showBrowser();
                     } else {
                         setEnabled(false);
@@ -152,6 +189,12 @@ public class MainActivity extends AppCompatActivity {
         bootstrapServerUrl();
     }
 
+    @Override
+    protected void onDestroy() {
+        cancelLoadTimeout();
+        super.onDestroy();
+    }
+
     private void bootstrapServerUrl() {
         String saved = prefs.getString(KEY_URL, null);
         if (saved == null || saved.trim().isEmpty()) {
@@ -161,7 +204,6 @@ public class MainActivity extends AppCompatActivity {
         }
         String url = normalizeUrl(saved.trim());
         if (isLegacyIpHttpUrl(url)) {
-            // Clear only — do NOT inject any operator domain
             prefs.edit().remove(KEY_URL).apply();
             hasServer = false;
             Toast.makeText(this, R.string.legacy_ip_cleared, Toast.LENGTH_LONG).show();
@@ -210,31 +252,55 @@ public class MainActivity extends AppCompatActivity {
         return mask == android.content.res.Configuration.UI_MODE_NIGHT_YES;
     }
 
-    private void showLoading(boolean show) {
-        if (loading == null) return;
-        loading.setVisibility(show ? View.VISIBLE : View.GONE);
+    private void hideKeyboard() {
+        View focus = getCurrentFocus();
+        if (focus == null) focus = serverUrl;
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null && focus != null) {
+            imm.hideSoftInputFromWindow(focus.getWindowToken(), 0);
+        }
     }
 
-    /** Push real status-bar height into CSS so the web menu sits below the clock. */
+    private void scheduleLoadTimeout() {
+        cancelLoadTimeout();
+        pageReady = false;
+        loadTimeout = () -> {
+            if (!pageReady && swipe.getVisibility() == View.VISIBLE) {
+                // Force-hide any residual chrome and show error if still blank-ish
+                progress.setVisibility(View.GONE);
+                swipe.setRefreshing(false);
+                String u = lastUrl.isEmpty() ? prefs.getString(KEY_URL, "") : lastUrl;
+                showErrorPage(u, getString(R.string.load_timeout));
+            }
+        };
+        mainHandler.postDelayed(loadTimeout, LOAD_TIMEOUT_MS);
+    }
+
+    private void cancelLoadTimeout() {
+        if (loadTimeout != null) {
+            mainHandler.removeCallbacks(loadTimeout);
+            loadTimeout = null;
+        }
+    }
+
+    private void markPageReady() {
+        pageReady = true;
+        cancelLoadTimeout();
+        progress.setVisibility(View.GONE);
+        swipe.setRefreshing(false);
+    }
+
     private void injectStatusBarCss(WebView view) {
         int px = 0;
         try {
-            Insets bars =
-                    ViewCompat.getRootWindowInsets(findViewById(R.id.root)) != null
-                            ? ViewCompat.getRootWindowInsets(findViewById(R.id.root))
-                                    .getInsets(WindowInsetsCompat.Type.statusBars())
-                            : null;
-            if (bars != null) px = bars.top;
+            WindowInsetsCompat wi = ViewCompat.getRootWindowInsets(findViewById(R.id.root));
+            if (wi != null) {
+                px = wi.getInsets(WindowInsetsCompat.Type.statusBars()).top;
+            }
         } catch (Exception ignored) {
         }
-        if (px <= 0) {
-            // Fallback ~24–28dp on most phones
-            px = dp(28);
-        }
+        if (px <= 0) px = dp(28);
         float density = getResources().getDisplayMetrics().density;
-        int cssPx = Math.round(px / density); // convert to CSS px roughly via density
-        // Actually WebView uses CSS pixels ≈ density-independent; pass physical/density
-        // Also sync WebView chrome with page theme after first paint
         String js =
                 "(function(){"
                         + "var d=document.documentElement;"
@@ -247,12 +313,10 @@ public class MainActivity extends AppCompatActivity {
         view.evaluateJavascript(js, null);
     }
 
-    /** Called from page JS when user toggles light/dark in the panel. */
     private void applyNativeChrome(boolean dark) {
         int bg = dark ? 0xFF0B1220 : 0xFFF1F5F9;
         webView.setBackgroundColor(bg);
         findViewById(R.id.root).setBackgroundColor(bg);
-        if (loading != null) loading.setBackgroundColor(bg);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().setNavigationBarColor(bg);
         }
@@ -283,12 +347,15 @@ public class MainActivity extends AppCompatActivity {
         s.setSupportZoom(false);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
-        // Prefer cache to speed up repeat opens
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
         s.setAllowFileAccess(false);
         s.setJavaScriptCanOpenWindowsAutomatically(false);
+        // Faster first paint
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            s.setSafeBrowsingEnabled(false); // slightly faster first paint for self-hosted panels
+            s.setSafeBrowsingEnabled(false);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
             try {
@@ -300,18 +367,20 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                // Ignore intermediate about:blank
+                if (url != null && (url.startsWith("about:") || url.startsWith("data:"))) return;
                 progress.setVisibility(View.VISIBLE);
                 progress.setIndeterminate(false);
-                progress.setProgress(8);
-                showLoading(true);
+                progress.setProgress(10);
+                scheduleLoadTimeout();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                if (url != null && url.startsWith("about:")) return;
+                // SPA: hide progress quickly — content may still hydrate JS
                 progress.setProgress(100);
-                progress.setVisibility(View.GONE);
-                swipe.setRefreshing(false);
-                showLoading(false);
+                markPageReady();
                 injectStatusBarCss(view);
                 if (url != null && !url.startsWith("data:") && !url.startsWith("about:")) {
                     lastUrl = url;
@@ -322,9 +391,7 @@ public class MainActivity extends AppCompatActivity {
             public void onReceivedError(
                     WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request != null && request.isForMainFrame()) {
-                    swipe.setRefreshing(false);
-                    progress.setVisibility(View.GONE);
-                    showLoading(false);
+                    markPageReady();
                     String desc = "";
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && error != null) {
                         desc = String.valueOf(error.getDescription());
@@ -340,18 +407,14 @@ public class MainActivity extends AppCompatActivity {
             public void onReceivedError(
                     WebView view, int errorCode, String description, String failingUrl) {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-                    swipe.setRefreshing(false);
-                    progress.setVisibility(View.GONE);
-                    showLoading(false);
+                    markPageReady();
                     showErrorPage(failingUrl, description);
                 }
             }
 
             @Override
             public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-                swipe.setRefreshing(false);
-                progress.setVisibility(View.GONE);
-                showLoading(false);
+                markPageReady();
                 showErrorPage(lastUrl, getString(R.string.ssl_error));
                 handler.cancel();
             }
@@ -366,15 +429,15 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
                 if (newProgress >= 100) {
-                    progress.setVisibility(View.GONE);
-                    // hide overlay a bit early once content is mostly ready
-                    if (newProgress >= 90) showLoading(false);
-                } else {
+                    markPageReady();
+                } else if (newProgress > 0) {
                     progress.setVisibility(View.VISIBLE);
                     progress.setIndeterminate(false);
-                    progress.setProgress(Math.max(8, newProgress));
-                    if (newProgress < 85) showLoading(true);
-                    else showLoading(false);
+                    progress.setProgress(Math.max(10, newProgress));
+                    // SPA often sits at high progress while JS runs — reveal page early
+                    if (newProgress >= 70) {
+                        progress.setVisibility(View.GONE);
+                    }
                 }
             }
         });
@@ -425,8 +488,7 @@ public class MainActivity extends AppCompatActivity {
                         + bg
                         + ";color:"
                         + text
-                        + ";"
-                        + "display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;}"
+                        + ";display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;}"
                         + ".card{max-width:420px;background:"
                         + card
                         + ";border:1px solid "
@@ -437,13 +499,9 @@ public class MainActivity extends AppCompatActivity {
                         + ";font-size:14px;line-height:1.55;}"
                         + "code{display:block;background:"
                         + codeBg
-                        + ";padding:10px;border-radius:10px;font-size:12px;"
-                        + "word-break:break-all;margin:12px 0;color:"
+                        + ";padding:10px;border-radius:10px;font-size:12px;word-break:break-all;margin:12px 0;color:"
                         + codeFg
                         + ";}"
-                        + ".hint{font-size:12px;color:"
-                        + muted
-                        + ";margin-top:8px;}"
                         + "button{width:100%;margin-top:10px;padding:14px;border:0;border-radius:12px;"
                         + "background:#0ea5e9;color:#fff;font-size:15px;font-weight:600;}"
                         + "button.secondary{background:"
@@ -453,19 +511,15 @@ public class MainActivity extends AppCompatActivity {
                         + ";}"
                         + "</style></head><body><div class='card'>"
                         + "<h1>无法打开面板</h1>"
-                        + "<p>请检查你填写的服务器地址是否正确，以及手机网络是否能访问该服务器。"
-                        + " 自托管用户请填写自己的 HTTPS 域名。</p>"
+                        + "<p>请检查地址是否为可访问的 HTTPS 域名，以及手机网络是否正常。</p>"
                         + "<code>"
                         + safeUrl
                         + "</code>"
-                        + (safeDetail.isEmpty()
-                                ? ""
-                                : "<p class='hint'>详情：" + safeDetail + "</p>")
+                        + (safeDetail.isEmpty() ? "" : "<p>" + safeDetail + "</p>")
                         + "<button onclick=\"CB.retry()\">重试</button>"
                         + "<button class='secondary' onclick=\"CB.changeServer()\">更换服务器</button>"
                         + "</div></body></html>";
         showBrowser();
-        showLoading(false);
         webView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
     }
 
@@ -512,13 +566,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showSetup(String current, boolean canCancel) {
+        cancelLoadTimeout();
         setup.setVisibility(View.VISIBLE);
         swipe.setVisibility(View.GONE);
         fabMenu.setVisibility(View.GONE);
         progress.setVisibility(View.GONE);
-        showLoading(false);
+        if (loading != null) loading.setVisibility(View.GONE);
         cancelSetupBtn.setVisibility(canCancel && hasServer ? View.VISIBLE : View.GONE);
-        // Always empty for new users; only show existing if editing
         if (current != null && !current.isEmpty() && !isLegacyIpHttpUrl(current)) {
             serverUrl.setText(current);
             serverUrl.setSelection(current.length());
@@ -526,12 +580,22 @@ public class MainActivity extends AppCompatActivity {
             serverUrl.setText("");
         }
         serverUrl.requestFocus();
+        // Request IME after layout
+        serverUrl.postDelayed(() -> {
+            InputMethodManager imm =
+                    (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(serverUrl, InputMethodManager.SHOW_IMPLICIT);
+            }
+            ViewCompat.requestApplyInsets(findViewById(R.id.root));
+        }, 200);
     }
 
     private void showBrowser() {
         setup.setVisibility(View.GONE);
         swipe.setVisibility(View.VISIBLE);
         fabMenu.setVisibility(View.VISIBLE);
+        hideKeyboard();
     }
 
     private void saveAndOpen() {
@@ -550,6 +614,7 @@ public class MainActivity extends AppCompatActivity {
                             (d, w) -> {
                                 prefs.edit().putString(KEY_URL, url).apply();
                                 hasServer = true;
+                                hideKeyboard();
                                 openUrl(url);
                             })
                     .setNegativeButton(android.R.string.cancel, null)
@@ -558,22 +623,27 @@ public class MainActivity extends AppCompatActivity {
         }
         prefs.edit().putString(KEY_URL, url).apply();
         hasServer = true;
+        hideKeyboard();
         Toast.makeText(this, R.string.url_saved, Toast.LENGTH_SHORT).show();
         openUrl(url);
     }
 
     private void openUrl(String url) {
         lastUrl = url;
+        pageReady = false;
         showBrowser();
         progress.setVisibility(View.VISIBLE);
-        progress.setProgress(5);
-        showLoading(true);
-        if (loadingText != null) loadingText.setText(R.string.loading);
+        progress.setProgress(8);
+        if (loading != null) loading.setVisibility(View.GONE); // never block
+        scheduleLoadTimeout();
+        webView.stopLoading();
         webView.loadUrl(url);
     }
 
     private static String normalizeUrl(String raw) {
         String u = raw.trim().replace('\u3000', ' ').trim();
+        // strip accidental whitespace in middle of copy-paste
+        u = u.replaceAll("\\s+", "");
         if (!u.startsWith("http://") && !u.startsWith("https://")) {
             if (u.matches("^\\d{1,3}(\\.\\d{1,3}){3}(:\\d+)?(/.*)?$")) {
                 u = "http://" + u;
