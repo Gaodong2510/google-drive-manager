@@ -1,7 +1,10 @@
+export type CloudProvider = "drive" | "onedrive";
+
 export type DriveAccount = {
   id: number;
   name: string;
   remote_name: string;
+  provider: CloudProvider | string;
   email?: string | null;
   status: string;
   last_check_at?: string | null;
@@ -15,6 +18,8 @@ export type DriveAccount = {
   running_mounts: number;
   team_drive: boolean;
   root_folder_id?: string | null;
+  onedrive_drive_id?: string | null;
+  onedrive_drive_type?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -25,6 +30,7 @@ export type Mount = {
   account_id: number;
   account_name?: string | null;
   remote_name?: string | null;
+  provider?: CloudProvider | string;
   remote_path: string;
   local_path: string;
   mode: string;

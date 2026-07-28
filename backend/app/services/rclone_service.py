@@ -96,6 +96,10 @@ class RcloneService:
         section = remote_name
         if not cp.has_section(section):
             cp.add_section(section)
+        # Clear leftover keys when switching provider
+        for key in list(cp.options(section)) if cp.has_section(section) else []:
+            if key not in ("type",):
+                cp.remove_option(section, key)
         cp.set(section, "type", "drive")
         cp.set(section, "scope", "drive")
         if client_id:
@@ -109,6 +113,108 @@ class RcloneService:
         if team_drive:
             cp.set(section, "team_drive", root_folder_id or "")
         self._save_config(cp)
+
+    def upsert_onedrive_remote(
+        self,
+        remote_name: str,
+        *,
+        token_json: str,
+        client_id: str = "",
+        client_secret: str = "",
+        drive_id: str | None = None,
+        drive_type: str | None = None,
+    ) -> None:
+        """Write an rclone type=onedrive remote section."""
+        remote_name = validate_remote_name(remote_name)
+        cp = self._load_config()
+        section = remote_name
+        if not cp.has_section(section):
+            cp.add_section(section)
+        for key in list(cp.options(section)):
+            if key not in ("type",):
+                cp.remove_option(section, key)
+        cp.set(section, "type", "onedrive")
+        cp.set(section, "token", token_json)
+        if client_id:
+            cp.set(section, "client_id", client_id)
+        if client_secret:
+            cp.set(section, "client_secret", client_secret)
+        if drive_id:
+            cp.set(section, "drive_id", drive_id)
+        if drive_type:
+            cp.set(section, "drive_type", drive_type)
+        self._save_config(cp)
+
+    def upsert_remote(
+        self,
+        remote_name: str,
+        *,
+        provider: str,
+        token_json: str,
+        client_id: str = "",
+        client_secret: str = "",
+        root_folder_id: str | None = None,
+        team_drive: bool = False,
+        onedrive_drive_id: str | None = None,
+        onedrive_drive_type: str | None = None,
+    ) -> None:
+        provider = (provider or "drive").strip().lower()
+        if provider == "onedrive":
+            self.upsert_onedrive_remote(
+                remote_name,
+                token_json=token_json,
+                client_id=client_id,
+                client_secret=client_secret,
+                drive_id=onedrive_drive_id,
+                drive_type=onedrive_drive_type,
+            )
+        else:
+            self.upsert_drive_remote(
+                remote_name,
+                client_id=client_id,
+                client_secret=client_secret,
+                token_json=token_json,
+                root_folder_id=root_folder_id,
+                team_drive=team_drive,
+            )
+
+    def detect_onedrive_drive(self, remote_name: str) -> dict[str, str] | None:
+        """Try to pick the first OneDrive drive via rclone backend drives."""
+        remote_name = validate_remote_name(remote_name)
+        binary = self.find_binary()
+        if not binary:
+            return None
+        # Prefer JSON if available
+        for extra in (["--json"], []):
+            r = run_cmd(
+                [binary, "backend", "drives", f"{remote_name}:", *extra, "--config", str(self.config_path)],
+                timeout=90,
+                env=self.env_with_config(),
+            )
+            if r.returncode != 0:
+                continue
+            out = (r.stdout or "").strip()
+            if not out:
+                continue
+            if extra:
+                try:
+                    data = json.loads(out)
+                    items = data if isinstance(data, list) else data.get("list") or data.get("drives") or []
+                    if items and isinstance(items, list):
+                        first = items[0]
+                        if isinstance(first, dict):
+                            did = str(first.get("id") or first.get("drive_id") or "").strip()
+                            dtype = str(first.get("driveType") or first.get("drive_type") or first.get("type") or "personal").strip()
+                            if did:
+                                return {"drive_id": did, "drive_type": dtype or "personal"}
+                except json.JSONDecodeError:
+                    pass
+            # Plain text: lines like "id driveType name"
+            for line in out.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2 and not parts[0].lower().startswith("id"):
+                    return {"drive_id": parts[0], "drive_type": parts[1]}
+        return None
 
     def delete_remote(self, remote_name: str) -> None:
         remote_name = validate_remote_name(remote_name)

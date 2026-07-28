@@ -119,12 +119,22 @@ def cache_clear(path: str | None = None, _: User = Depends(get_current_user)):
 def get_settings_api(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     settings = get_settings()
     secret_set = bool(get_setting(db, "google_client_secret_enc"))
+    ms_secret_set = bool(get_setting(db, "microsoft_client_secret_enc"))
+    default_cb = (
+        get_setting(db, "google_redirect_uri")
+        or settings.google_redirect_uri
+        or f"http://127.0.0.1:{settings.port}/api/oauth/callback"
+    )
     return SettingsOut(
         google_client_id=get_setting(db, "google_client_id") or settings.google_client_id,
         google_client_secret_set=secret_set,
-        google_redirect_uri=get_setting(db, "google_redirect_uri")
-        or settings.google_redirect_uri
-        or f"http://127.0.0.1:{settings.port}/api/oauth/callback",
+        google_redirect_uri=default_cb,
+        microsoft_client_id=get_setting(db, "microsoft_client_id") or settings.microsoft_client_id,
+        microsoft_client_secret_set=ms_secret_set,
+        microsoft_redirect_uri=get_setting(db, "microsoft_redirect_uri")
+        or settings.microsoft_redirect_uri
+        or default_cb,
+        microsoft_tenant=get_setting(db, "microsoft_tenant") or settings.microsoft_tenant or "common",
         allow_file_delete=settings.allow_file_delete,
         watchdog_interval_seconds=int(get_setting(db, "watchdog_interval_seconds") or settings.watchdog_interval_seconds),
         watchdog_max_restarts=int(get_setting(db, "watchdog_max_restarts") or settings.watchdog_max_restarts),
@@ -146,6 +156,14 @@ def update_settings_api(
         set_setting(db, "google_client_secret_enc", encrypt_value(body.google_client_secret))
     if body.google_redirect_uri is not None:
         set_setting(db, "google_redirect_uri", body.google_redirect_uri)
+    if body.microsoft_client_id is not None:
+        set_setting(db, "microsoft_client_id", body.microsoft_client_id)
+    if body.microsoft_client_secret is not None and body.microsoft_client_secret != "":
+        set_setting(db, "microsoft_client_secret_enc", encrypt_value(body.microsoft_client_secret))
+    if body.microsoft_redirect_uri is not None:
+        set_setting(db, "microsoft_redirect_uri", body.microsoft_redirect_uri)
+    if body.microsoft_tenant is not None:
+        set_setting(db, "microsoft_tenant", body.microsoft_tenant.strip() or "common")
     if body.watchdog_interval_seconds is not None:
         set_setting(db, "watchdog_interval_seconds", str(body.watchdog_interval_seconds))
     if body.watchdog_max_restarts is not None:

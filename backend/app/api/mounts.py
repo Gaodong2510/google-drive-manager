@@ -43,6 +43,7 @@ def to_out(mount: MountPoint, svc: MountService) -> MountOut:
         account_id=mount.account_id,
         account_name=acc.name if acc else None,
         remote_name=acc.remote_name if acc else None,
+        provider=(getattr(acc, "provider", None) or "drive") if acc else "drive",
         remote_path=mount.remote_path or "",
         local_path=mount.local_path,
         mode=mount.mode,

@@ -49,6 +49,8 @@ class DriveAccount(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     remote_name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # rclone backend: drive | onedrive
+    provider: Mapped[str] = mapped_column(String(32), default="drive", index=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Encrypted tokens / sensitive fields
     client_id_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -56,6 +58,9 @@ class DriveAccount(Base):
     token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     root_folder_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     team_drive: Mapped[bool] = mapped_column(Boolean, default=False)
+    # OneDrive-specific (rclone drive_id / drive_type)
+    onedrive_drive_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    onedrive_drive_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")  # pending|connected|error|revoked
     last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -119,5 +124,7 @@ class OAuthState(Base):
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     remote_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     redirect_after: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # drive | onedrive
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True, default="drive")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

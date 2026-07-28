@@ -8,19 +8,50 @@ import {
   XCircle,
   Clock,
   Activity,
+  FileVideo,
 } from "lucide-react";
 import { api, formatBytes, formatSpeed } from "../lib/api";
 import type { UploadStatus } from "../lib/types";
-import { Alert, Empty, Loading, PageHeader, ProgressBar, StatCard, StatusBadge } from "../components/ui";
+import { Alert, Empty, Loading, PageHeader, ProgressBar, StatusBadge } from "../components/ui";
 import clsx from "clsx";
 
-const eventMeta: Record<string, { label: string; color: string; icon: typeof CheckCircle2 }> = {
-  success: { label: "成功", color: "text-emerald-600 dark:text-emerald-400", icon: CheckCircle2 },
-  copied: { label: "已同步", color: "text-emerald-600 dark:text-emerald-400", icon: CheckCircle2 },
-  queued: { label: "排队中", color: "text-amber-600 dark:text-amber-400", icon: Clock },
-  uploading: { label: "上传中", color: "text-sky-600 dark:text-sky-400", icon: CloudUpload },
-  failed: { label: "失败", color: "text-rose-600 dark:text-rose-400", icon: XCircle },
-  stats: { label: "统计", color: "text-slate-500", icon: Activity },
+const eventMeta: Record<string, { label: string; color: string; bg: string; icon: typeof CheckCircle2 }> = {
+  success: {
+    label: "成功",
+    color: "text-emerald-600 dark:text-emerald-400",
+    bg: "bg-emerald-50 dark:bg-emerald-950/40",
+    icon: CheckCircle2,
+  },
+  copied: {
+    label: "已同步",
+    color: "text-emerald-600 dark:text-emerald-400",
+    bg: "bg-emerald-50 dark:bg-emerald-950/40",
+    icon: CheckCircle2,
+  },
+  queued: {
+    label: "排队中",
+    color: "text-amber-600 dark:text-amber-400",
+    bg: "bg-amber-50 dark:bg-amber-950/40",
+    icon: Clock,
+  },
+  uploading: {
+    label: "上传中",
+    color: "text-sky-600 dark:text-sky-400",
+    bg: "bg-sky-50 dark:bg-sky-950/40",
+    icon: CloudUpload,
+  },
+  failed: {
+    label: "失败",
+    color: "text-rose-600 dark:text-rose-400",
+    bg: "bg-rose-50 dark:bg-rose-950/40",
+    icon: XCircle,
+  },
+  stats: {
+    label: "统计",
+    color: "text-slate-500",
+    bg: "bg-slate-100 dark:bg-slate-800",
+    icon: Activity,
+  },
 };
 
 export default function UploadsPage() {
@@ -61,7 +92,7 @@ export default function UploadsPage() {
     <div>
       <PageHeader
         title="上传进度"
-        desc="MoviePilot 写入挂载后，rclone VFS 回写到 Google Drive 的实时队列与文件明细"
+        desc="MoviePilot 写入后，rclone VFS 回写到云盘的实时队列与明细"
         actions={
           <>
             <label className="btn-secondary cursor-pointer gap-2">
@@ -81,43 +112,80 @@ export default function UploadsPage() {
         </div>
       )}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="上传状态"
-          value={active ? "进行中" : "空闲"}
-          icon={active ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
-          accent={
-            active
-              ? "bg-sky-50 text-sky-600 dark:bg-sky-950 dark:text-sky-300"
-              : "bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-300"
-          }
-          sub={active ? "有文件正在排队或上传到 Drive" : "队列为空，云端已跟上本地写入"}
-        />
-        <StatCard
-          title="排队 / 上传中"
-          value={`${summary?.to_upload ?? 0} / ${summary?.uploading ?? 0}`}
-          icon={<ArrowUpCircle size={18} />}
-          sub="VFS to_upload · uploading"
-        />
-        <StatCard
-          title="当前速度"
-          value={formatSpeed(summary?.total_speed_bps ?? 0)}
-          icon={<CloudUpload size={18} />}
-          sub="需重启挂载开启 RC 后更准确"
-        />
-        <StatCard
-          title="错误数"
-          value={summary?.errors ?? 0}
-          icon={<XCircle size={18} />}
-          accent={
-            (summary?.errors ?? 0) > 0
-              ? "bg-rose-50 text-rose-600 dark:bg-rose-950 dark:text-rose-300"
-              : undefined
-          }
-        />
+      {/* 汇总一栏 */}
+      <div className="card mb-4 !p-0 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3 dark:border-slate-800">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <CloudUpload size={16} className="text-sky-500" />
+            全局上传状态
+          </div>
+          <span
+            className={clsx(
+              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium",
+              active
+                ? "bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300"
+                : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+            )}
+          >
+            {active ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+            {active ? "进行中" : "空闲"}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:grid-cols-4 sm:divide-y-0 dark:divide-slate-800">
+          <div className="px-4 py-4 sm:px-5">
+            <div className="text-xs font-medium text-slate-500">状态</div>
+            <div
+              className={clsx(
+                "mt-1 text-xl font-bold tracking-tight",
+                active ? "text-sky-600" : "text-emerald-600"
+              )}
+            >
+              {active ? "进行中" : "空闲"}
+            </div>
+            <div className="mt-1 text-[11px] text-slate-400">
+              {active ? "有文件排队或上传" : "队列已清空"}
+            </div>
+          </div>
+          <div className="px-4 py-4 sm:px-5">
+            <div className="flex items-center gap-1 text-xs font-medium text-slate-500">
+              <ArrowUpCircle size={12} /> 排队 / 上传中
+            </div>
+            <div className="mt-1 text-xl font-bold tracking-tight tabular-nums">
+              {summary?.to_upload ?? 0}
+              <span className="mx-1 text-slate-300 dark:text-slate-600">/</span>
+              {summary?.uploading ?? 0}
+            </div>
+            <div className="mt-1 text-[11px] text-slate-400">VFS to_upload · uploading</div>
+          </div>
+          <div className="px-4 py-4 sm:px-5">
+            <div className="flex items-center gap-1 text-xs font-medium text-slate-500">
+              <CloudUpload size={12} /> 当前速度
+            </div>
+            <div className="mt-1 text-xl font-bold tracking-tight">
+              {formatSpeed(summary?.total_speed_bps ?? 0)}
+            </div>
+            <div className="mt-1 text-[11px] text-slate-400">RC 更准确</div>
+          </div>
+          <div className="px-4 py-4 sm:px-5">
+            <div className="flex items-center gap-1 text-xs font-medium text-slate-500">
+              <XCircle size={12} /> 错误数
+            </div>
+            <div
+              className={clsx(
+                "mt-1 text-xl font-bold tracking-tight tabular-nums",
+                (summary?.errors ?? 0) > 0 ? "text-rose-600" : ""
+              )}
+            >
+              {summary?.errors ?? 0}
+            </div>
+            <div className="mt-1 text-[11px] text-slate-400">
+              活跃挂载 {summary?.active_mounts ?? 0}
+            </div>
+          </div>
+        </div>
       </div>
 
-      {!mounts.length && <Empty title="暂无挂载" desc="请先在挂载管理中创建并启动 Google Drive 挂载" />}
+      {!mounts.length && <Empty title="暂无挂载" desc="请先在挂载管理中创建并启动云盘挂载" />}
 
       <div className="space-y-4">
         {mounts.map((m) => {
@@ -129,12 +197,14 @@ export default function UploadsPage() {
                 : m.active
                   ? 50
                   : 100;
+          const events = m.recent_events || [];
           return (
-            <div key={m.mount_id} className="card">
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-lg font-semibold">{m.mount_name}</h3>
+            <div key={m.mount_id} className="card !p-0 overflow-hidden">
+              {/* Header */}
+              <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-base font-semibold tracking-tight">{m.mount_name}</h3>
                     <StatusBadge status={m.status} />
                     {m.active && (
                       <span className="badge bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
@@ -143,30 +213,36 @@ export default function UploadsPage() {
                       </span>
                     )}
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {m.local_path}
+                  <div className="mt-1 truncate font-mono text-xs text-slate-500">{m.local_path}</div>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-400">
                     {m.rc_enabled ? (
-                      <span className="ml-2 text-emerald-600">· RC 实时 :{m.rc_port}</span>
+                      <span className="text-emerald-600">RC :{m.rc_port}</span>
                     ) : (
-                      <span className="ml-2 text-amber-600">· 日志模式</span>
+                      <span className="text-amber-600">日志模式</span>
                     )}
-                    <span className="ml-2">· 数据源 {m.source}</span>
+                    <span>· 源 {m.source}</span>
+                    <span>
+                      · 对象 {m.objects} · 使用中 {m.in_use}
+                    </span>
                   </div>
                 </div>
-                <div className="text-right text-sm text-slate-500">
-                  <div>
-                    缓存对象 {m.objects} · 使用中 {m.in_use}
-                  </div>
-                  <div>
-                    待传 {m.to_upload} · 上传中 {m.uploading} · 缓存 {m.cache_total_display || formatBytes(m.cache_total_bytes)}
-                  </div>
-                  {m.last_cleaned_at && <div className="text-xs">队列快照 {m.last_cleaned_at}</div>}
+                <div className="flex shrink-0 flex-wrap gap-2 text-xs">
+                  <span className="rounded-lg bg-slate-50 px-2.5 py-1.5 dark:bg-slate-800/60">
+                    待传 <strong className="text-slate-800 dark:text-slate-100">{m.to_upload}</strong>
+                  </span>
+                  <span className="rounded-lg bg-sky-50 px-2.5 py-1.5 text-sky-800 dark:bg-sky-950/40 dark:text-sky-200">
+                    上传中 <strong>{m.uploading}</strong>
+                  </span>
+                  <span className="rounded-lg bg-slate-50 px-2.5 py-1.5 dark:bg-slate-800/60">
+                    缓存 <strong>{m.cache_total_display || formatBytes(m.cache_total_bytes)}</strong>
+                  </span>
                 </div>
               </div>
 
+              {/* Progress */}
               {(m.transfer_percent != null || m.active) && (
-                <div className="mb-4">
-                  <div className="mb-1 flex justify-between text-xs text-slate-500">
+                <div className="border-b border-slate-100 px-5 py-3 dark:border-slate-800">
+                  <div className="mb-1.5 flex flex-wrap justify-between gap-2 text-xs text-slate-500">
                     <span>
                       {m.transfer_bytes != null
                         ? `${formatBytes(m.transfer_bytes)}${m.transfer_total_bytes ? ` / ${formatBytes(m.transfer_total_bytes)}` : ""}`
@@ -174,81 +250,98 @@ export default function UploadsPage() {
                           ? "VFS 回写进行中"
                           : "已完成"}
                     </span>
-                    <span>
+                    <span className="font-medium text-slate-600 dark:text-slate-300">
                       {m.transfer_speed_bps != null && `${formatSpeed(m.transfer_speed_bps)} · `}
-                      {m.transfer_eta ? `ETA ${m.transfer_eta}` : m.transfer_percent != null ? `${m.transfer_percent}%` : ""}
+                      {m.transfer_eta
+                        ? `ETA ${m.transfer_eta}`
+                        : m.transfer_percent != null
+                          ? `${m.transfer_percent}%`
+                          : ""}
                     </span>
                   </div>
-                  <ProgressBar
-                    value={pct}
-                    color={m.active ? "bg-sky-500" : "bg-emerald-500"}
-                  />
+                  <ProgressBar value={pct} color={m.active ? "bg-sky-500" : "bg-emerald-500"} />
                 </div>
               )}
 
               {m.note && (
-                <div className="mb-3">
+                <div className="border-b border-slate-100 px-5 py-3 dark:border-slate-800">
                   <Alert type="warning">{m.note}</Alert>
                 </div>
               )}
 
-              <div className="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-800">
-                <table className="min-w-full text-left text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase text-slate-400 dark:bg-slate-900/50">
-                    <tr>
-                      <th className="px-3 py-2 font-medium">时间</th>
-                      <th className="px-3 py-2 font-medium">状态</th>
-                      <th className="px-3 py-2 font-medium">文件</th>
-                      <th className="px-3 py-2 font-medium">详情</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {(m.recent_events || []).length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="px-3 py-8 text-center text-slate-400">
-                          暂无最近上传事件（MoviePilot 入库后会在这里显示排队/成功）
-                        </td>
-                      </tr>
-                    )}
-                    {(m.recent_events || []).map((ev, i) => {
+              {/* Events timeline */}
+              <div className="px-5 py-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-sm font-semibold">最近上传事件</div>
+                  <span className="text-[11px] text-slate-400">{events.length} 条</span>
+                </div>
+                {events.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 py-10 text-center dark:border-slate-700">
+                    <FileVideo size={28} className="mb-2 text-slate-300 dark:text-slate-600" />
+                    <p className="text-sm text-slate-500">暂无上传事件</p>
+                    <p className="mt-1 text-xs text-slate-400">MoviePilot 入库后会显示排队 / 成功</p>
+                  </div>
+                ) : (
+                  <ul className="space-y-2">
+                    {events.map((ev, i) => {
                       const meta = eventMeta[ev.event] || eventMeta.stats;
                       const Icon = meta.icon;
+                      const name = ev.path?.split("/").pop() || ev.path || "—";
                       return (
-                        <tr key={`${ev.path}-${i}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-900/40">
-                          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-400">
-                            {ev.time ? ev.time.replace("T", " ").replace("+00:00", "") : "—"}
-                          </td>
-                          <td className="px-3 py-2">
-                            <span className={clsx("inline-flex items-center gap-1 text-xs font-medium", meta.color)}>
-                              <Icon size={14} />
-                              {meta.label}
-                            </span>
-                          </td>
-                          <td className="max-w-md truncate px-3 py-2 font-mono text-xs" title={ev.path}>
-                            {ev.path}
-                          </td>
-                          <td className="max-w-xs truncate px-3 py-2 text-xs text-slate-500" title={ev.message}>
-                            {ev.message}
-                          </td>
-                        </tr>
+                        <li
+                          key={`${ev.path}-${i}`}
+                          className="flex gap-3 rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-2.5 transition hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/40 dark:hover:bg-slate-800/40"
+                        >
+                          <div
+                            className={clsx(
+                              "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+                              meta.bg,
+                              meta.color
+                            )}
+                          >
+                            <Icon size={15} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={clsx("text-xs font-semibold", meta.color)}>{meta.label}</span>
+                              <span className="text-[11px] text-slate-400">
+                                {ev.time ? ev.time.replace("T", " ").replace("+00:00", "") : "—"}
+                              </span>
+                              {ev.size_bytes != null && (
+                                <span className="text-[11px] text-slate-400">{formatBytes(ev.size_bytes)}</span>
+                              )}
+                            </div>
+                            <div className="mt-0.5 truncate text-sm font-medium text-slate-700 dark:text-slate-200" title={ev.path}>
+                              {name}
+                            </div>
+                            {ev.message && (
+                              <div className="mt-0.5 truncate text-xs text-slate-500" title={ev.message}>
+                                {ev.message}
+                              </div>
+                            )}
+                            {ev.path && name !== ev.path && (
+                              <div className="mt-0.5 truncate font-mono text-[10px] text-slate-400" title={ev.path}>
+                                {ev.path}
+                              </div>
+                            )}
+                          </div>
+                        </li>
                       );
                     })}
-                  </tbody>
-                </table>
+                  </ul>
+                )}
               </div>
             </div>
           );
         })}
       </div>
 
-      <div className="mt-6 card text-sm text-slate-500">
-        <div className="mb-2 font-medium text-slate-700 dark:text-slate-200">说明（与 MP 联用）</div>
-        <ul className="list-inside list-disc space-y-1">
-          <li>MoviePilot 整理后写入挂载目录时，先落盘到本地 VFS 缓存，再由 rclone 回写到 Google Drive。</li>
-          <li>「排队中 / 上传中」是正常过程，不是错误；传完后会变为「成功」。真正失败才会显示红色「失败」。</li>
-          <li>本地 copy/move 完成 ≠ 云端已传完；以本页「待传 / 上传中 = 0」且视频为「成功」为准。</li>
-          <li>若 Dashboard 瞬时没看到上行流量，可能是写缓存阶段，或上传已在几十秒内完成（带宽较高时常见）。</li>
-          <li>每个文件只显示最终状态（已成功的不会再显示旧的排队）。</li>
+      <div className="card mt-4 text-sm text-slate-500">
+        <div className="mb-2 font-medium text-slate-700 dark:text-slate-200">说明（与 MoviePilot 联用）</div>
+        <ul className="list-inside list-disc space-y-1 text-xs sm:text-sm">
+          <li>整理后写入挂载目录时，先落盘 VFS 缓存，再由 rclone 回写云盘。</li>
+          <li>「排队 / 上传中」是正常过程；真正失败才显示红色「失败」。</li>
+          <li>本地 copy 完成 ≠ 云端传完；以待传/上传中为 0 且事件为「成功」为准。</li>
         </ul>
       </div>
     </div>

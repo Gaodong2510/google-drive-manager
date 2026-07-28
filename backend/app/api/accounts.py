@@ -44,9 +44,12 @@ def to_out(acc: DriveAccount, db: Session) -> DriveAccountOut:
         id=acc.id,
         name=acc.name,
         remote_name=acc.remote_name,
+        provider=getattr(acc, "provider", None) or "drive",
         email=acc.email,
         root_folder_id=acc.root_folder_id,
         team_drive=acc.team_drive,
+        onedrive_drive_id=getattr(acc, "onedrive_drive_id", None),
+        onedrive_drive_type=getattr(acc, "onedrive_drive_type", None),
         status=acc.status,
         last_check_at=acc.last_check_at,
         last_error=acc.last_error,
@@ -81,11 +84,17 @@ def create_account(
         raise HTTPException(400, "remote 名称只能包含字母数字下划线和连字符")
     if db.query(DriveAccount).filter(DriveAccount.remote_name == remote).first():
         raise HTTPException(400, "remote 名称已存在")
+    provider = (body.provider or "drive").strip().lower()
+    if provider not in ("drive", "onedrive"):
+        raise HTTPException(400, "provider 仅支持 drive 或 onedrive")
     acc = DriveAccount(
         name=body.name,
         remote_name=remote,
-        root_folder_id=body.root_folder_id,
-        team_drive=body.team_drive,
+        provider=provider,
+        root_folder_id=body.root_folder_id if provider == "drive" else None,
+        team_drive=body.team_drive if provider == "drive" else False,
+        onedrive_drive_id=body.onedrive_drive_id if provider == "onedrive" else None,
+        onedrive_drive_type=body.onedrive_drive_type if provider == "onedrive" else None,
         notes=body.notes,
         status="pending",
     )
@@ -128,8 +137,17 @@ def update_account(
         acc.client_secret_enc = encrypt_value(body.client_secret) if body.client_secret else None
     if body.root_folder_id is not None:
         acc.root_folder_id = body.root_folder_id or None
+    if body.provider is not None:
+        p = body.provider.strip().lower()
+        if p not in ("drive", "onedrive"):
+            raise HTTPException(400, "provider 仅支持 drive 或 onedrive")
+        acc.provider = p
     if body.team_drive is not None:
         acc.team_drive = body.team_drive
+    if body.onedrive_drive_id is not None:
+        acc.onedrive_drive_id = body.onedrive_drive_id or None
+    if body.onedrive_drive_type is not None:
+        acc.onedrive_drive_type = body.onedrive_drive_type or None
     if body.notes is not None:
         acc.notes = body.notes
     db.add(acc)
@@ -170,7 +188,12 @@ def start_oauth(account_id: int, db: Session = Depends(get_db), _: User = Depend
     if not acc:
         raise HTTPException(404, "账号不存在")
     try:
-        data = OAuthService(db).start_auth(account_id=acc.id, name=acc.name, remote_name=acc.remote_name)
+        data = OAuthService(db).start_auth(
+            account_id=acc.id,
+            name=acc.name,
+            remote_name=acc.remote_name,
+            provider=getattr(acc, "provider", None) or "drive",
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return OAuthStartResponse(**data)
@@ -186,6 +209,7 @@ def start_oauth_new(
         data = OAuthService(db).start_auth(
             name=body.name,
             remote_name=body.remote_name or _remote_from_name(body.name),
+            provider=body.provider or "drive",
             client_id=body.client_id,
             client_secret=body.client_secret,
         )
@@ -208,10 +232,13 @@ def paste_token_create(
             token_raw=body.token,
             name=body.name,
             remote_name=body.remote_name,
+            provider=body.provider,
             client_id=body.client_id,
             client_secret=body.client_secret,
             root_folder_id=body.root_folder_id,
             team_drive=body.team_drive,
+            onedrive_drive_id=body.onedrive_drive_id,
+            onedrive_drive_type=body.onedrive_drive_type,
             notes=body.notes,
             test_connection=body.test_connection,
         )
@@ -235,10 +262,13 @@ def paste_token_existing(
             token_raw=body.token,
             account_id=account_id,
             name=body.name,
+            provider=body.provider,
             client_id=body.client_id,
             client_secret=body.client_secret,
             root_folder_id=body.root_folder_id,
             team_drive=body.team_drive,
+            onedrive_drive_id=body.onedrive_drive_id,
+            onedrive_drive_type=body.onedrive_drive_type,
             notes=body.notes,
             test_connection=body.test_connection,
         )
@@ -255,7 +285,7 @@ def import_rclone_preview(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Parse pasted rclone.conf and list drive remotes."""
+    """Parse pasted rclone.conf and list drive/onedrive remotes."""
     try:
         remotes = OAuthService(db).preview_rclone_import(body.config_text)
     except ValueError as exc:
@@ -270,7 +300,7 @@ def import_rclone(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Import selected drive remotes from rclone.conf text."""
+    """Import selected drive/onedrive remotes from rclone.conf text."""
     try:
         accounts = OAuthService(db).import_rclone_remotes(
             config_text=body.config_text,
@@ -287,7 +317,7 @@ def import_rclone(
     return RcloneImportResult(
         imported=outs,
         count=len(outs),
-        message=f"成功导入 {len(outs)} 个 Google Drive 账号",
+        message=f"成功导入 {len(outs)} 个云盘账号（Google Drive / OneDrive）",
     )
 
 

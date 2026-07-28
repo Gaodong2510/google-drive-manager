@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     google_redirect_uri: str = ""
     oauth_scopes: str = "https://www.googleapis.com/auth/drive"
 
+    # Microsoft Azure AD OAuth (OneDrive / personal + work)
+    microsoft_client_id: str = ""
+    microsoft_client_secret: str = ""
+    microsoft_redirect_uri: str = ""
+    microsoft_tenant: str = "common"  # common | consumers | organizations | tenant-id
+    microsoft_oauth_scopes: str = (
+        "offline_access openid profile User.Read Files.ReadWrite.All Sites.Read.All"
+    )
+
     # rclone
     rclone_bin: str = "rclone"
     rclone_config_path: Path | None = None

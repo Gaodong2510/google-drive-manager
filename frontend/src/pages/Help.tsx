@@ -136,24 +136,80 @@ export default function HelpPage() {
 
         <div className="space-y-4">
           <Alert type="info">
-            <strong>推荐</strong>使用「粘贴 Token」或「导入 rclone」，无需公网回调地址。
-            Web OAuth 仍可用，回调地址为：
+            Google Drive / OneDrive 都支持<strong>网页登录授权（Web OAuth）</strong>，体验类似 CloudDrive2：
+            点按钮 → 浏览器登录 → 完成。回调地址：
             <div className="mt-2">
               <Code>{callback}</Code>
             </div>
+            也可用「粘贴 Token」或「导入 rclone」，无需配置 OAuth 应用。
           </Alert>
 
           {/* 1. Connect */}
-          <Section id="connect" title="一、如何连接 Google Drive" icon={<Cloud size={18} />}>
-            <p className="text-slate-500">三种方式任选其一（按省事程度排序）：</p>
-            <Pre>{`方式 A（推荐）本机 rclone authorize → 面板粘贴 Token
-方式 B  粘贴已有 rclone.conf → 导入 Drive remote
-方式 C  自建 Google Cloud Web OAuth → 面板弹窗授权
+          <Section id="connect" title="一、如何连接 Google Drive / OneDrive" icon={<Cloud size={18} />}>
+            <p className="text-slate-500">三种方式任选其一：</p>
+            <Pre>{`方式 A  Web OAuth 网页登录（类似 CD2，推荐有域名时使用）
+        Google → 系统设置填 Google Client
+        OneDrive → 系统设置填 Azure 应用 Client
+方式 B  本机 rclone authorize → 面板粘贴 Token
+方式 C  粘贴 rclone.conf → 导入 remote
         ↓
-「挂载管理」创建 → 启动 → Emby/Plex 扫库`}</Pre>
+「挂载管理」创建 → 启动`}</Pre>
 
             <h3 className="pt-2 font-semibold text-slate-800 dark:text-slate-100">
-              方式 A：粘贴 Token（最简单，推荐）
+              OneDrive Web OAuth（Azure，约 3 分钟）
+            </h3>
+            <div className="space-y-4">
+              <Step n={1} title="Azure 应用注册">
+                <ol className="list-decimal space-y-1 pl-5">
+                  <li>
+                    打开{" "}
+                    <a
+                      className="text-brand-600 underline"
+                      href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Azure 应用注册
+                    </a>
+                  </li>
+                  <li>
+                    新注册 → 支持账户类型选<strong>任何组织目录 + 个人 Microsoft 帐户</strong>
+                  </li>
+                  <li>
+                    平台添加 <strong>Web</strong>，重定向 URI 填 <Code>{callback}</Code>
+                  </li>
+                  <li>
+                    证书和密码 → 新建客户端密码，复制<strong>值</strong>（不是 Secret ID）
+                  </li>
+                  <li>
+                    （可选）API 权限添加 Microsoft Graph 委托权限：
+                    <code className="font-mono text-xs">Files.ReadWrite.All</code>、
+                    <code className="font-mono text-xs">User.Read</code>、
+                    <code className="font-mono text-xs">offline_access</code>、
+                    <code className="font-mono text-xs">Sites.Read.All</code>
+                  </li>
+                </ol>
+              </Step>
+              <Step n={2} title="填入 GDM 系统设置">
+                <p>
+                  <Link className="text-brand-600 underline" to="/settings">
+                    系统设置
+                  </Link>{" "}
+                  → Microsoft OAuth：填 Client ID、Secret、Redirect URI（Tenant 用 common）→ 保存
+                </p>
+              </Step>
+              <Step n={3} title="账号页网页登录">
+                <p>
+                  <Link className="text-brand-600 underline" to="/accounts">
+                    云盘账号
+                  </Link>{" "}
+                  → 添加 OneDrive 账号 → 点 <strong>Web OAuth</strong> → 微软登录同意 → 完成
+                </p>
+              </Step>
+            </div>
+
+            <h3 className="pt-4 font-semibold text-slate-800 dark:text-slate-100">
+              方式 B：粘贴 Token（无需 Azure / Google Cloud）
             </h3>
             <div className="space-y-4">
               <Step n={1} title="在有浏览器的电脑安装 rclone">
@@ -167,8 +223,8 @@ export default function HelpPage() {
                 <Pre>{"# Windows / macOS / Linux\ncurl https://rclone.org/install.sh | sudo bash"}</Pre>
               </Step>
               <Step n={2} title="本机授权">
-                <Pre>rclone authorize &quot;drive&quot;</Pre>
-                <p>浏览器会打开 Google 登录页，登录并同意后，终端会打印一段 JSON。</p>
+                <Pre>{`# Google Drive\nrclone authorize "drive"\n\n# OneDrive\nrclone authorize "onedrive"`}</Pre>
+                <p>浏览器打开登录页，同意后终端打印 JSON，整段粘贴到面板即可。</p>
               </Step>
               <Step n={3} title="粘贴到面板">
                 <ol className="list-decimal space-y-1 pl-5">

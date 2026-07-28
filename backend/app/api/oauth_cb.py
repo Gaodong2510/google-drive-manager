@@ -29,18 +29,17 @@ def oauth_callback(
         el = (error or "").lower()
         if "access_denied" in el:
             hint = (
-                " 常见原因：① 未在 OAuth 同意屏幕添加测试用户；"
-                "② 点了「返回安全页面」而不是「高级→继续」；"
-                "③ 登录的 Google 账号不是测试用户。"
+                " 常见原因：① 未同意权限；② Google 测试用户未添加；"
+                "③ Microsoft 应用未开放个人账号登录（支持账户类型选错）。"
             )
         elif "redirect" in el:
-            hint = " 请核对 Google 控制台与面板的 Redirect URI 是否完全一致。"
+            hint = " 请核对控制台与面板的 Redirect URI 是否完全一致（Google 或 Azure）。"
         return HTMLResponse(_page(False, f"授权失败: {detail}{hint}"), status_code=400)
     if not code or not state:
         return HTMLResponse(
             _page(
                 False,
-                "缺少 code 或 state 参数。若从 Google 跳回却仍看到此页，"
+                "缺少 code 或 state 参数。若从 Google/Microsoft 跳回却仍看到此页，"
                 "请重新在面板点击「Web OAuth」，不要直接打开回调地址。",
             ),
             status_code=400,
@@ -49,8 +48,9 @@ def oauth_callback(
         acc = OAuthService(db).handle_callback(code, state)
     except Exception as exc:
         return HTMLResponse(_page(False, str(exc)), status_code=400)
+    label = "OneDrive" if (getattr(acc, "provider", None) or "") == "onedrive" else "Google Drive"
     return HTMLResponse(
-        _page(True, f"账号「{acc.name}」授权成功", email=acc.email or "")
+        _page(True, f"{label} 账号「{acc.name}」授权成功", email=acc.email or "")
     )
 
 
@@ -59,7 +59,7 @@ def _page(ok: bool, message: str, email: str = "") -> str:
     title = "授权成功" if ok else "授权失败"
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>{title} - Google Drive Manager</title>
+<title>{title} - Drive Manager</title>
 <style>
 body{{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}}
 .card{{background:#1e293b;border-radius:16px;padding:32px;max-width:420px;box-shadow:0 20px 40px rgba(0,0,0,.4);text-align:center}}

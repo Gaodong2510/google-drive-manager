@@ -4,20 +4,45 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.security import decode_access_token
 from app.models.models import MountPoint, User
 from app.schemas.schemas import BrowseResponse, MessageOut
 from app.services import files_service
 
 router = APIRouter(prefix="/files", tags=["files"])
+_bearer = HTTPBearer(auto_error=False)
 
 
 def _roots(db: Session) -> list[str]:
     return [m.local_path for m in db.query(MountPoint).all()]
+
+
+def _user_from_token_or_bearer(
+    db: Session,
+    creds: HTTPAuthorizationCredentials | None,
+    token: str | None,
+) -> User:
+    """Allow Authorization header or ?token= for media tags (img/video/audio)."""
+    raw = None
+    if creds and creds.credentials:
+        raw = creds.credentials
+    elif token:
+        raw = token.strip()
+    if not raw:
+        raise HTTPException(status_code=401, detail="未登录或令牌无效")
+    payload = decode_access_token(raw)
+    if not payload or "sub" not in payload:
+        raise HTTPException(status_code=401, detail="令牌无效或已过期")
+    user = db.query(User).filter(User.username == payload["sub"]).first()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="用户不存在或已禁用")
+    return user
 
 
 @router.get("/roots")
@@ -29,6 +54,9 @@ def list_roots(db: Session = Depends(get_db), _: User = Depends(get_current_user
             "name": m.name,
             "path": m.local_path,
             "status": m.status,
+            "account_name": m.account.name if m.account else None,
+            "provider": (getattr(m.account, "provider", None) or "drive") if m.account else "drive",
+            "remote_path": m.remote_path or "",
         }
         for m in mounts
     ]
@@ -87,13 +115,23 @@ def delete_file(
 
 
 @router.get("/download")
-def download(path: str = Query(...), db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def download(
+    path: str = Query(...),
+    token: str | None = Query(default=None, description="JWT for media preview (img/video src)"),
+    inline: bool = Query(default=False, description="Content-Disposition: inline for preview"),
+    db: Session = Depends(get_db),
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+):
+    _user_from_token_or_bearer(db, creds, token)
     try:
         fp = files_service.resolve_download(path, _roots(db))
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
+    media_type = files_service.guess_media_type(fp)
+    # FileResponse supports HTTP Range (needed for video seeking)
     return FileResponse(
         path=str(fp),
         filename=fp.name,
-        media_type=files_service.guess_media_type(fp),
+        media_type=media_type,
+        content_disposition_type="inline" if inline else "attachment",
     )

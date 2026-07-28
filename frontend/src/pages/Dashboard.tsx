@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Activity,
-  Cloud,
+  ArrowDown,
+  ArrowUp,
   CloudUpload,
   Cpu,
   HardDrive,
@@ -10,10 +11,56 @@ import {
   Network,
   RefreshCw,
   Server,
+  ShieldCheck,
+  Timer,
 } from "lucide-react";
 import { api, formatBytes, formatDuration, formatSpeed } from "../lib/api";
 import type { Dashboard, UploadStatus } from "../lib/types";
-import { Alert, Loading, PageHeader, ProgressBar, StatCard, StatusBadge } from "../components/ui";
+import { Alert, Loading, PageHeader, ProgressBar, StatusBadge } from "../components/ui";
+import { GoogleDriveIcon, ProviderMark } from "../components/BrandIcons";
+import clsx from "clsx";
+
+function barColor(pct: number, kind: "default" | "disk" = "default") {
+  if (pct >= 90) return "bg-rose-500";
+  if (pct >= 80) return "bg-amber-500";
+  return kind === "disk" ? "bg-emerald-500" : "bg-brand-500";
+}
+
+function MetricCell({
+  icon,
+  label,
+  value,
+  sub,
+  bar,
+  barClass,
+  className,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  sub?: React.ReactNode;
+  bar?: number;
+  barClass?: string;
+  className?: string;
+}) {
+  return (
+    <div className={clsx("min-w-0 px-4 py-3 sm:px-5 sm:py-4", className)}>
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-500">
+        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+          {icon}
+        </span>
+        {label}
+      </div>
+      <div className="text-xl font-bold tracking-tight sm:text-2xl">{value}</div>
+      {sub && <div className="mt-1 text-[11px] leading-snug text-slate-500 sm:text-xs">{sub}</div>}
+      {bar != null && (
+        <div className="mt-2.5">
+          <ProgressBar value={bar} color={barClass} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
@@ -47,14 +94,12 @@ export default function DashboardPage() {
   if (!data) return <Alert type="error">{error || "无法加载"}</Alert>;
 
   const s = data.system;
-  const memColor = s.memory_percent >= 90 ? "bg-rose-500" : s.memory_percent >= 80 ? "bg-amber-500" : "bg-brand-500";
-  const diskColor = s.disk_percent >= 90 ? "bg-rose-500" : s.disk_percent >= 80 ? "bg-amber-500" : "bg-emerald-500";
 
   return (
     <div>
       <PageHeader
-        title="Dashboard"
-        desc="服务器与 Google Drive 挂载实时状态"
+        title="总览"
+        desc="服务器资源与云盘挂载实时状态"
         actions={
           <button className="btn-secondary" onClick={load}>
             <RefreshCw size={16} /> 刷新
@@ -77,172 +122,285 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="CPU" value={`${s.cpu_percent.toFixed(1)}%`} icon={<Cpu size={18} />} sub={<ProgressBar value={s.cpu_percent} />} />
-        <StatCard
-          title="内存"
-          value={`${s.memory_percent.toFixed(1)}%`}
-          icon={<MemoryStick size={18} />}
-          sub={
-            <>
-              <ProgressBar value={s.memory_percent} color={memColor} />
-              <div className="mt-1">
-                {formatBytes(s.memory_used)} / {formatBytes(s.memory_total)}
-              </div>
-            </>
-          }
-        />
-        <StatCard
-          title="系统磁盘"
-          value={`${s.disk_percent.toFixed(1)}%`}
-          icon={<Server size={18} />}
-          sub={
-            <>
-              <ProgressBar value={s.disk_percent} color={diskColor} />
-              <div className="mt-1">
-                {formatBytes(s.disk_used)} / {formatBytes(s.disk_total)}
-              </div>
-            </>
-          }
-        />
-        <StatCard
-          title="网络"
-          value={
-            <span className="text-lg">
-              ↑ {formatSpeed(s.net_upload_speed)} · ↓ {formatSpeed(s.net_download_speed)}
-            </span>
-          }
-          icon={<Network size={18} />}
-          sub={`系统运行 ${formatDuration(s.uptime_seconds)}`}
-        />
+      {/* 系统资源：一栏四格 */}
+      <div className="card mb-4 !p-0 overflow-hidden">
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3 dark:border-slate-800">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Server size={16} className="text-brand-500" />
+            系统资源
+          </div>
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+            <Timer size={12} />
+            运行 {formatDuration(s.uptime_seconds)}
+          </div>
+        </div>
+        <div className="grid divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4 dark:divide-slate-800">
+          <MetricCell
+            icon={<Cpu size={14} />}
+            label="CPU"
+            value={`${s.cpu_percent.toFixed(1)}%`}
+            bar={s.cpu_percent}
+            barClass={barColor(s.cpu_percent)}
+            className="sm:border-r sm:border-slate-100 dark:sm:border-slate-800"
+          />
+          <MetricCell
+            icon={<MemoryStick size={14} />}
+            label="内存"
+            value={`${s.memory_percent.toFixed(1)}%`}
+            sub={`${formatBytes(s.memory_used)} / ${formatBytes(s.memory_total)}`}
+            bar={s.memory_percent}
+            barClass={barColor(s.memory_percent)}
+            className="lg:border-r lg:border-slate-100 dark:lg:border-slate-800"
+          />
+          <MetricCell
+            icon={<HardDrive size={14} />}
+            label="磁盘"
+            value={`${s.disk_percent.toFixed(1)}%`}
+            sub={`${formatBytes(s.disk_used)} / ${formatBytes(s.disk_total)}`}
+            bar={s.disk_percent}
+            barClass={barColor(s.disk_percent, "disk")}
+            className="sm:border-r sm:border-slate-100 dark:sm:border-slate-800"
+          />
+          <MetricCell
+            icon={<Network size={14} />}
+            label="网络"
+            value={
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-base sm:text-lg">
+                <span className="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400">
+                  <ArrowUp size={14} />
+                  {formatSpeed(s.net_upload_speed)}
+                </span>
+                <span className="inline-flex items-center gap-0.5 text-sky-600 dark:text-sky-400">
+                  <ArrowDown size={14} />
+                  {formatSpeed(s.net_download_speed)}
+                </span>
+              </span>
+            }
+            sub="实时上下行速率"
+          />
+        </div>
       </div>
 
-      {uploads && (
-        <div className="mb-6">
-          <Link to="/uploads" className="card block transition hover:ring-2 hover:ring-brand-200 dark:hover:ring-brand-800">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                <CloudUpload size={18} className="text-sky-500" />
-                Drive 上传进度
-              </div>
-              <span className="text-xs text-brand-600">查看详情 →</span>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-4 text-sm">
-              <div>
-                <div className="text-xs text-slate-400">状态</div>
-                <div className="font-semibold">
-                  {uploads.summary.any_active ? (
-                    <span className="text-sky-600">进行中</span>
-                  ) : (
-                    <span className="text-emerald-600">空闲</span>
-                  )}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-slate-400">排队 / 上传中</div>
-                <div className="font-semibold">
-                  {uploads.summary.to_upload} / {uploads.summary.uploading}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-slate-400">速度</div>
-                <div className="font-semibold">{formatSpeed(uploads.summary.total_speed_bps)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-slate-400">错误</div>
-                <div className="font-semibold">{uploads.summary.errors}</div>
-              </div>
-            </div>
-          </Link>
-        </div>
-      )}
-
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Drive 账号" value={data.accounts_total} icon={<Cloud size={18} />} accent="bg-sky-50 text-sky-600 dark:bg-sky-950 dark:text-sky-300" />
-        <StatCard title="挂载总数" value={data.mounts_total} icon={<HardDrive size={18} />} />
-        <StatCard
-          title="运行 / 异常"
-          value={
-            <span>
-              <span className="text-emerald-600">{data.mounts_running}</span>
-              <span className="mx-1 text-slate-300">/</span>
-              <span className="text-rose-600">{data.mounts_error}</span>
-            </span>
-          }
-          icon={<Activity size={18} />}
-          sub={`已停止 ${data.mounts_stopped}`}
-        />
-        <StatCard title="总缓存" value={formatBytes(data.total_cache_bytes)} icon={<Server size={18} />} />
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="card lg:col-span-1">
-          <h3 className="mb-4 font-semibold">rclone 状态</h3>
-          <dl className="space-y-3 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-slate-500">安装状态</dt>
-              <dd>{data.rclone_installed ? <StatusBadge status="connected" /> : <StatusBadge status="error" />}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-500">版本</dt>
-              <dd className="font-mono">{data.rclone_version ? `v${data.rclone_version}` : "未安装"}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-500">mount 进程</dt>
-              <dd>{data.rclone_mount_processes}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-500">Watchdog</dt>
-              <dd>{data.watchdog_running ? <StatusBadge status="running" /> : <StatusBadge status="stopped" />}</dd>
-            </div>
-          </dl>
-          {!data.rclone_installed && (
-            <div className="mt-4">
-              <Link to="/settings" className="btn-primary w-full">
-                前往安装 rclone
-              </Link>
-            </div>
-          )}
-        </div>
-
-        <div className="card lg:col-span-2">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="font-semibold">挂载一览</h3>
-            <Link to="/mounts" className="text-sm text-brand-600 hover:underline">
-              管理
+      {/* 云盘 + 挂载：合并一栏 */}
+      <div className="card mb-4 !p-0 overflow-hidden">
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3 dark:border-slate-800">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <GoogleDriveIcon size={16} />
+            云盘与挂载
+          </div>
+          <div className="flex gap-2">
+            <Link to="/accounts" className="text-xs text-brand-600 hover:underline">
+              账号
+            </Link>
+            <span className="text-slate-300">·</span>
+            <Link to="/mounts" className="text-xs text-brand-600 hover:underline">
+              挂载
             </Link>
           </div>
-          {data.mounts.length === 0 ? (
-            <p className="py-8 text-center text-sm text-slate-500">暂无挂载，请先添加账号并创建挂载点</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="text-xs uppercase text-slate-400">
-                  <tr>
-                    <th className="pb-2 pr-3">名称</th>
-                    <th className="pb-2 pr-3">状态</th>
-                    <th className="pb-2 pr-3">路径</th>
-                    <th className="pb-2 pr-3">PID</th>
-                    <th className="pb-2">运行时长</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {data.mounts.map((m) => (
-                    <tr key={m.id}>
-                      <td className="py-2.5 pr-3 font-medium">{m.name}</td>
-                      <td className="py-2.5 pr-3">
-                        <StatusBadge status={m.status} />
-                      </td>
-                      <td className="py-2.5 pr-3 font-mono text-xs text-slate-500">{m.local_path}</td>
-                      <td className="py-2.5 pr-3 font-mono text-xs">{m.pid || "—"}</td>
-                      <td className="py-2.5">{formatDuration(m.uptime_seconds)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </div>
+        <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:grid-cols-4 sm:divide-y-0 dark:divide-slate-800">
+          <Link
+            to="/accounts"
+            className="group px-4 py-4 transition hover:bg-slate-50/80 dark:hover:bg-slate-800/40 sm:px-5"
+          >
+            <div className="text-xs font-medium text-slate-500">云盘账号</div>
+            <div className="mt-1 text-2xl font-bold tracking-tight group-hover:text-brand-600">
+              {data.accounts_total}
+            </div>
+            <div className="mt-1 text-[11px] text-slate-400">已配置账号</div>
+          </Link>
+          <div className="px-4 py-4 sm:px-5">
+            <div className="text-xs font-medium text-slate-500">挂载总数</div>
+            <div className="mt-1 text-2xl font-bold tracking-tight">{data.mounts_total}</div>
+            <div className="mt-1 text-[11px] text-slate-400">挂载点</div>
+          </div>
+          <div className="px-4 py-4 sm:px-5">
+            <div className="text-xs font-medium text-slate-500">运行 / 异常</div>
+            <div className="mt-1 text-2xl font-bold tracking-tight">
+              <span className="text-emerald-600">{data.mounts_running}</span>
+              <span className="mx-1 text-slate-300 dark:text-slate-600">/</span>
+              <span className={data.mounts_error ? "text-rose-600" : "text-slate-400"}>
+                {data.mounts_error}
+              </span>
+            </div>
+            <div className="mt-1 text-[11px] text-slate-400">已停止 {data.mounts_stopped}</div>
+          </div>
+          <Link
+            to="/cache"
+            className="group px-4 py-4 transition hover:bg-slate-50/80 dark:hover:bg-slate-800/40 sm:px-5"
+          >
+            <div className="text-xs font-medium text-slate-500">总缓存</div>
+            <div className="mt-1 text-2xl font-bold tracking-tight group-hover:text-brand-600">
+              {formatBytes(data.total_cache_bytes)}
+            </div>
+            <div className="mt-1 text-[11px] text-slate-400">VFS 缓存占用</div>
+          </Link>
+        </div>
+      </div>
+
+      {/* 上传进度条 */}
+      {uploads && (
+        <Link
+          to="/uploads"
+          className="card mb-4 block !py-3.5 transition hover:ring-2 hover:ring-brand-200 dark:hover:ring-brand-800"
+        >
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <CloudUpload size={16} className="text-sky-500" />
+              上传进度
+            </div>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+              <span>
+                <span className="text-slate-400">状态 </span>
+                {uploads.summary.any_active ? (
+                  <span className="font-medium text-sky-600">进行中</span>
+                ) : (
+                  <span className="font-medium text-emerald-600">空闲</span>
+                )}
+              </span>
+              <span>
+                <span className="text-slate-400">排队/上传 </span>
+                <span className="font-medium">
+                  {uploads.summary.to_upload}/{uploads.summary.uploading}
+                </span>
+              </span>
+              <span>
+                <span className="text-slate-400">速度 </span>
+                <span className="font-medium">{formatSpeed(uploads.summary.total_speed_bps)}</span>
+              </span>
+              <span>
+                <span className="text-slate-400">错误 </span>
+                <span className={clsx("font-medium", uploads.summary.errors ? "text-rose-600" : "")}>
+                  {uploads.summary.errors}
+                </span>
+              </span>
+            </div>
+            <span className="ml-auto text-xs text-brand-600">详情 →</span>
+          </div>
+        </Link>
+      )}
+
+      {/* rclone + 挂载一览：同一大卡片 */}
+      <div className="card !p-0 overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-3.5 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Activity size={16} className="text-indigo-500" />
+            挂载一览
+          </div>
+
+          {/* rclone 状态条 */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              className={clsx(
+                "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium",
+                data.rclone_installed
+                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                  : "bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300"
+              )}
+            >
+              <span
+                className={clsx(
+                  "h-1.5 w-1.5 rounded-full",
+                  data.rclone_installed ? "bg-emerald-500" : "bg-rose-500"
+                )}
+              />
+              rclone {data.rclone_installed ? `v${data.rclone_version || "?"}` : "未安装"}
+            </div>
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              <HardDrive size={12} />
+              进程 {data.rclone_mount_processes}
+            </div>
+            <div
+              className={clsx(
+                "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium",
+                data.watchdog_running
+                  ? "bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300"
+                  : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+              )}
+            >
+              <ShieldCheck size={12} />
+              Watchdog {data.watchdog_running ? "运行中" : "已停止"}
+            </div>
+            {!data.rclone_installed && (
+              <Link to="/settings" className="text-xs font-medium text-brand-600 hover:underline">
+                去安装
+              </Link>
+            )}
+            <Link
+              to="/mounts"
+              className="ml-auto text-xs font-medium text-brand-600 hover:underline sm:ml-1"
+            >
+              管理挂载 →
+            </Link>
+          </div>
+        </div>
+
+        {data.mounts.length === 0 ? (
+          <div className="px-5 py-14 text-center">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400 dark:bg-slate-800">
+              <HardDrive size={22} />
+            </div>
+            <p className="text-sm font-medium text-slate-600 dark:text-slate-300">暂无挂载点</p>
+            <p className="mt-1 text-xs text-slate-400">先添加云盘账号，再创建挂载</p>
+            <div className="mt-4 flex justify-center gap-2">
+              <Link to="/accounts" className="btn-secondary !py-1.5 text-xs">
+                云盘账号
+              </Link>
+              <Link to="/mounts" className="btn-primary !py-1.5 text-xs">
+                创建挂载
+              </Link>
+            </div>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {data.mounts.map((m) => {
+              return (
+                <div
+                  key={m.id}
+                  className="flex flex-col gap-3 px-5 py-3.5 transition hover:bg-slate-50/60 dark:hover:bg-slate-800/30 sm:flex-row sm:items-center sm:gap-4"
+                >
+                  <div className="flex min-w-0 flex-1 items-start gap-3">
+                    <ProviderMark provider={m.provider} size={40} className="mt-0.5" />
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold tracking-tight">{m.name}</span>
+                        <StatusBadge status={m.status} />
+                      </div>
+                      <div className="mt-0.5 truncate font-mono text-xs text-slate-500" title={m.local_path}>
+                        {m.local_path}
+                      </div>
+                      {m.account_name && (
+                        <div className="mt-0.5 text-[11px] text-slate-400">
+                          {m.provider === "onedrive" ? "OneDrive" : "Google Drive"} · {m.account_name}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 pl-12 text-xs text-slate-500 sm:pl-0 sm:text-right">
+                    <div>
+                      <span className="text-slate-400">PID </span>
+                      <span className="font-mono text-slate-700 dark:text-slate-200">{m.pid || "—"}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400">时长 </span>
+                      <span className="font-medium text-slate-700 dark:text-slate-200">
+                        {formatDuration(m.uptime_seconds)}
+                      </span>
+                    </div>
+                    {m.cache_size_bytes > 0 && (
+                      <div>
+                        <span className="text-slate-400">缓存 </span>
+                        <span className="font-medium text-slate-700 dark:text-slate-200">
+                          {formatBytes(m.cache_size_bytes)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -44,12 +44,15 @@ def create_backup(db: Session) -> Path:
             {
                 "name": a.name,
                 "remote_name": a.remote_name,
+                "provider": getattr(a, "provider", None) or "drive",
                 "email": a.email,
                 "client_id_enc": a.client_id_enc,
                 "client_secret_enc": a.client_secret_enc,
                 "token_enc": a.token_enc,
                 "root_folder_id": a.root_folder_id,
                 "team_drive": a.team_drive,
+                "onedrive_drive_id": getattr(a, "onedrive_drive_id", None),
+                "onedrive_drive_type": getattr(a, "onedrive_drive_type", None),
                 "status": a.status,
                 "notes": a.notes,
             }
@@ -126,11 +129,14 @@ def restore_backup(db: Session, file_path: Path) -> dict:
             acc = DriveAccount(name=item["name"], remote_name=item["remote_name"])
             db.add(acc)
         acc.email = item.get("email")
+        acc.provider = item.get("provider") or "drive"
         acc.client_id_enc = item.get("client_id_enc")
         acc.client_secret_enc = item.get("client_secret_enc")
         acc.token_enc = item.get("token_enc")
         acc.root_folder_id = item.get("root_folder_id")
         acc.team_drive = bool(item.get("team_drive"))
+        acc.onedrive_drive_id = item.get("onedrive_drive_id")
+        acc.onedrive_drive_type = item.get("onedrive_drive_type")
         acc.status = item.get("status") or "pending"
         acc.notes = item.get("notes")
         db.flush()

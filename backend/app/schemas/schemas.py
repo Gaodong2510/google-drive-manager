@@ -25,6 +25,11 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class ChangeUsernameRequest(BaseModel):
+    new_username: str = Field(min_length=2, max_length=64)
+    current_password: str
+
+
 class UserOut(BaseModel):
     id: int
     username: str
@@ -34,23 +39,39 @@ class UserOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ---- Drive accounts ----
+class ChangeUsernameResponse(BaseModel):
+    message: str
+    username: str
+    access_token: str
+    token_type: str = "bearer"
+
+
+# ---- Drive / OneDrive accounts ----
+SUPPORTED_PROVIDERS = ("drive", "onedrive")
+
+
 class DriveAccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     remote_name: str | None = Field(default=None, max_length=64)
+    provider: str = Field(default="drive", description="drive | onedrive")
     client_id: str | None = None
     client_secret: str | None = None
     root_folder_id: str | None = None
     team_drive: bool = False
+    onedrive_drive_id: str | None = None
+    onedrive_drive_type: str | None = None
     notes: str | None = None
 
 
 class DriveAccountUpdate(BaseModel):
     name: str | None = None
+    provider: str | None = None
     client_id: str | None = None
     client_secret: str | None = None
     root_folder_id: str | None = None
     team_drive: bool | None = None
+    onedrive_drive_id: str | None = None
+    onedrive_drive_type: str | None = None
     notes: str | None = None
 
 
@@ -58,9 +79,12 @@ class DriveAccountOut(BaseModel):
     id: int
     name: str
     remote_name: str
+    provider: str = "drive"
     email: str | None = None
     root_folder_id: str | None = None
     team_drive: bool
+    onedrive_drive_id: str | None = None
+    onedrive_drive_type: str | None = None
     status: str
     last_check_at: datetime | None = None
     last_error: str | None = None
@@ -89,10 +113,13 @@ class PasteTokenRequest(BaseModel):
     token: str = Field(min_length=10, description="rclone authorize 输出的 JSON 或完整粘贴文本")
     name: str | None = Field(default=None, max_length=128)
     remote_name: str | None = Field(default=None, max_length=64)
+    provider: str = Field(default="drive", description="drive | onedrive")
     client_id: str | None = None
     client_secret: str | None = None
     root_folder_id: str | None = None
     team_drive: bool = False
+    onedrive_drive_id: str | None = None
+    onedrive_drive_type: str | None = None
     notes: str | None = None
     test_connection: bool = True
 
@@ -110,6 +137,8 @@ class RcloneRemotePreview(BaseModel):
     root_folder_id: str | None = None
     team_drive: str | None = None
     scope: str | None = None
+    drive_id: str | None = None
+    drive_type: str | None = None
 
 
 class RcloneImportPreviewResponse(BaseModel):
@@ -184,6 +213,7 @@ class MountOut(BaseModel):
     account_id: int
     account_name: str | None = None
     remote_name: str | None = None
+    provider: str = "drive"  # drive | onedrive (from linked account)
     remote_path: str
     local_path: str
     mode: str
@@ -329,6 +359,10 @@ class SettingUpdate(BaseModel):
     google_client_id: str | None = None
     google_client_secret: str | None = None
     google_redirect_uri: str | None = None
+    microsoft_client_id: str | None = None
+    microsoft_client_secret: str | None = None
+    microsoft_redirect_uri: str | None = None
+    microsoft_tenant: str | None = None
     allow_file_delete: bool | None = None
     watchdog_interval_seconds: int | None = None
     watchdog_max_restarts: int | None = None
@@ -338,6 +372,10 @@ class SettingsOut(BaseModel):
     google_client_id: str = ""
     google_client_secret_set: bool = False
     google_redirect_uri: str = ""
+    microsoft_client_id: str = ""
+    microsoft_client_secret_set: bool = False
+    microsoft_redirect_uri: str = ""
+    microsoft_tenant: str = "common"
     allow_file_delete: bool = True
     watchdog_interval_seconds: int = 30
     watchdog_max_restarts: int = 5

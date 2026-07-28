@@ -52,6 +52,7 @@ def build_mount_args(
     config_path: Path,
     rclone_bin: str,
     mount_id: int | None = None,
+    provider: str = "drive",
 ) -> list[str]:
     remote_name = validate_remote_name(remote_name)
     local = validate_path(local_path)
@@ -61,6 +62,7 @@ def build_mount_args(
     if "\n" in rpath or "\r" in rpath or ":" in rpath:
         raise ValueError("非法 remote 路径")
     source = f"{remote_name}:{rpath}"
+    provider = (provider or "drive").strip().lower()
 
     args: list[str] = [
         rclone_bin,
@@ -76,7 +78,7 @@ def build_mount_args(
         "date,time",
     ]
 
-    # Localhost RC for upload progress (MoviePilot writes → VFS → Drive)
+    # Localhost RC for upload progress (MoviePilot writes → VFS → cloud)
     if mount_id is not None and int(mount_id) > 0:
         from app.services.upload_monitor import rc_port_for_mount
 
@@ -108,12 +110,18 @@ def build_mount_args(
         ("dir_cache_time", "--dir-cache-time"),
         ("poll_interval", "--poll-interval"),
         ("attr_timeout", "--attr-timeout"),
-        ("drive_chunk_size", "--drive-chunk-size"),
         ("vfs_read_ahead", "--vfs-read-ahead"),
         ("vfs_write_back", "--vfs-write-back"),
         ("multi_thread_cutoff", "--multi-thread-cutoff"),
         ("umask", "--umask"),
     ]
+    # Provider-specific chunk size flags
+    if provider == "drive":
+        mapping.append(("drive_chunk_size", "--drive-chunk-size"))
+    elif provider == "onedrive":
+        mapping.append(("drive_chunk_size", "--onedrive-chunk-size"))
+        mapping.append(("onedrive_chunk_size", "--onedrive-chunk-size"))
+
     for key, flag in mapping:
         if key in params and params[key] is not None and params[key] != "":
             val = validate_safe_value(str(params[key]), key)
@@ -143,15 +151,17 @@ def build_mount_args(
 
     args.extend(["--cache-dir", str(cache)])
 
-    # Media-friendly defaults always applied when not conflicting
-    extra_safe_flags = [
-        "--use-mmap",
-        "--drive-pacer-min-sleep",
-        "10ms",
-        "--drive-pacer-burst",
-        "200",
-    ]
-    args.extend(extra_safe_flags)
+    # Media-friendly defaults; Google Drive pacer only for drive remotes
+    args.append("--use-mmap")
+    if provider == "drive":
+        args.extend(
+            [
+                "--drive-pacer-min-sleep",
+                "10ms",
+                "--drive-pacer-burst",
+                "200",
+            ]
+        )
 
     # Extra args: only allow known-safe flag patterns
     extra = params.get("extra_args") or []
@@ -210,6 +220,7 @@ class MountService:
                 config_path=self.rclone.config_path,
                 rclone_bin=binary,
                 mount_id=mount.id,
+                provider=getattr(account, "provider", None) or "drive",
             )
         except Exception as exc:
             return [f"# error: {exc}"]
@@ -405,6 +416,7 @@ class MountService:
             config_path=self.rclone.config_path,
             rclone_bin=binary,
             mount_id=mount.id,
+            provider=getattr(account, "provider", None) or "drive",
         )
 
         mount.status = "starting"

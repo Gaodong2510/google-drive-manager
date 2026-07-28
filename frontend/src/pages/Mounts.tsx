@@ -7,10 +7,14 @@ import {
   RotateCcw,
   Square,
   Trash2,
+  Timer,
+  Cpu,
 } from "lucide-react";
 import { api, formatBytes, formatDuration, getToken } from "../lib/api";
 import type { DriveAccount, Mount } from "../lib/types";
 import { Alert, Empty, Loading, Modal, PageHeader, StatusBadge } from "../components/ui";
+import { ProviderMark } from "../components/BrandIcons";
+import clsx from "clsx";
 
 export default function MountsPage() {
   const [list, setList] = useState<Mount[]>([]);
@@ -29,7 +33,7 @@ export default function MountsPage() {
     name: "",
     account_id: 0,
     remote_path: "",
-    local_path: "/mnt/google_drive",
+    local_path: "/mnt/cloud_drive",
     mode: "media",
     auto_start: true,
   });
@@ -104,11 +108,14 @@ export default function MountsPage() {
 
   if (loading) return <Loading />;
 
+  const running = list.filter((m) => m.status === "running").length;
+  const errored = list.filter((m) => m.status === "error").length;
+
   return (
     <div>
       <PageHeader
         title="挂载管理"
-        desc="使用 rclone 将 Google Drive 挂载到本地，支持媒体服务器优化参数"
+        desc="rclone 将 Google Drive / OneDrive 挂载到本地 · 媒体服务器友好"
         actions={
           <>
             <button className="btn-secondary" onClick={load}>
@@ -131,69 +138,159 @@ export default function MountsPage() {
         </div>
       )}
 
+      {list.length > 0 && (
+        <div className="card mb-4 !py-3">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+            <span>
+              <span className="text-slate-400">挂载 </span>
+              <strong>{list.length}</strong>
+            </span>
+            <span>
+              <span className="text-slate-400">运行 </span>
+              <strong className="text-emerald-600">{running}</strong>
+            </span>
+            <span>
+              <span className="text-slate-400">异常 </span>
+              <strong className={errored ? "text-rose-600" : "text-slate-400"}>{errored}</strong>
+            </span>
+            <span className="text-xs text-slate-400">每 8 秒自动刷新状态</span>
+          </div>
+        </div>
+      )}
+
       {list.length === 0 ? (
-        <Empty title="暂无挂载点" desc={accounts.length ? "创建第一个挂载，建议使用媒体服务器模式" : "请先添加并授权 Google Drive 账号"} />
+        <Empty
+          title="暂无挂载点"
+          desc={
+            accounts.length
+              ? "创建第一个挂载，建议使用媒体服务器模式"
+              : "请先添加并授权云盘账号（Google Drive / OneDrive）"
+          }
+        />
       ) : (
-        <div className="space-y-4">
-          {list.map((m) => (
-            <div key={m.id} className="card">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <h3 className="text-lg font-semibold">{m.name}</h3>
-                    <StatusBadge status={m.status} />
-                    <span className="badge bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                      {m.mode === "media" ? "媒体服务器" : m.mode === "cloud" ? "普通云盘" : "自定义"}
-                    </span>
-                    {m.watchdog_paused && <span className="badge bg-rose-100 text-rose-700">Watchdog 已暂停</span>}
-                  </div>
-                  <div className="grid gap-1 text-sm text-slate-500 sm:grid-cols-2">
-                    <div>
-                      账号: <span className="text-slate-700 dark:text-slate-200">{m.account_name}</span> ({m.remote_name}
-                      {m.remote_path ? `:${m.remote_path}` : ":"})
-                    </div>
-                    <div>
-                      本地: <span className="font-mono text-xs text-slate-700 dark:text-slate-200">{m.local_path}</span>
-                    </div>
-                    <div>PID: {m.pid || "—"}</div>
-                    <div>运行: {formatDuration(m.uptime_seconds)}</div>
-                    <div>缓存: {formatBytes(m.cache_size_bytes)}</div>
-                    <div>
-                      重启次数: {m.restart_count} · 连续失败: {m.consecutive_failures}
-                    </div>
-                  </div>
-                  {m.last_error && (
-                    <div className="mt-3">
-                      <Alert type="error">{m.last_error}</Alert>
-                    </div>
+        <div className="space-y-3">
+          {list.map((m) => {
+            const runningMount = m.status === "running";
+            return (
+              <div key={m.id} className="card !p-0 overflow-hidden">
+                <div
+                  className={clsx(
+                    "h-0.5 w-full",
+                    runningMount
+                      ? "bg-emerald-500"
+                      : m.status === "error"
+                        ? "bg-rose-500"
+                        : m.status === "starting"
+                          ? "bg-amber-400"
+                          : "bg-slate-300 dark:bg-slate-600"
                   )}
-                  <details className="mt-3">
-                    <summary className="cursor-pointer text-xs text-slate-400">查看 rclone 命令预览</summary>
-                    <pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 p-3 text-xs text-emerald-300">
-                      {m.command_preview.join(" \\\n  ")}
-                    </pre>
-                  </details>
-                </div>
-                <div className="flex flex-wrap gap-2 lg:w-48 lg:flex-col">
-                  <button className="btn-primary" disabled={busy || m.status === "running"} onClick={() => act(m.id, "start")}>
-                    <Play size={14} /> 启动
-                  </button>
-                  <button className="btn-secondary" disabled={busy} onClick={() => act(m.id, "stop")}>
-                    <Square size={14} /> 停止
-                  </button>
-                  <button className="btn-secondary" disabled={busy} onClick={() => act(m.id, "restart")}>
-                    <RotateCcw size={14} /> 重启
-                  </button>
-                  <button className="btn-ghost" onClick={() => showLogs(m.id)}>
-                    <FileText size={14} /> 日志
-                  </button>
-                  <button className="btn-ghost text-rose-600" onClick={() => remove(m.id, m.name)}>
-                    <Trash2 size={14} /> 删除
-                  </button>
+                />
+                <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-stretch lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-3 flex flex-wrap items-center gap-2.5">
+                      <ProviderMark provider={m.provider} size={40} />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold tracking-tight">{m.name}</h3>
+                          <StatusBadge status={m.status} />
+                          <span className="badge bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            {m.mode === "media" ? "媒体服务器" : m.mode === "cloud" ? "普通云盘" : "自定义"}
+                          </span>
+                          <span
+                            className={
+                              m.provider === "onedrive"
+                                ? "badge bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300"
+                                : "badge bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                            }
+                          >
+                            {m.provider === "onedrive" ? "OneDrive" : "Google Drive"}
+                          </span>
+                          {m.watchdog_paused && (
+                            <span className="badge bg-rose-100 text-rose-700">Watchdog 暂停</span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 text-xs text-slate-500">
+                          {m.account_name || "未知账号"}
+                          {m.remote_name ? ` · ${m.remote_name}` : ""}
+                          {m.remote_path ? `:${m.remote_path}` : ":"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      <div className="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
+                        <div className="text-[11px] text-slate-400">本地路径</div>
+                        <div className="mt-0.5 truncate font-mono text-xs text-slate-700 dark:text-slate-200" title={m.local_path}>
+                          {m.local_path}
+                        </div>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
+                        <div className="text-[11px] text-slate-400">PID · 运行时长</div>
+                        <div className="mt-0.5 flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-200">
+                          <Cpu size={12} className="text-slate-400" />
+                          {m.pid || "—"}
+                          <span className="text-slate-300">·</span>
+                          <Timer size={12} className="text-slate-400" />
+                          {formatDuration(m.uptime_seconds)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
+                        <div className="text-[11px] text-slate-400">缓存 · 重启</div>
+                        <div className="mt-0.5 text-xs font-medium text-slate-700 dark:text-slate-200">
+                          {formatBytes(m.cache_size_bytes)}
+                          <span className="mx-1 text-slate-300">·</span>
+                          重启 {m.restart_count} / 失败 {m.consecutive_failures}
+                        </div>
+                      </div>
+                    </div>
+
+                    {m.last_error && (
+                      <div className="mt-3">
+                        <Alert type="error">{m.last_error}</Alert>
+                      </div>
+                    )}
+                    <details className="mt-3">
+                      <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-600">
+                        rclone 命令预览
+                      </summary>
+                      <pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 p-3 text-xs text-emerald-300">
+                        {m.command_preview.join(" \\\n  ")}
+                      </pre>
+                    </details>
+                  </div>
+
+                  <div className="flex flex-row flex-wrap gap-2 lg:w-36 lg:flex-col lg:justify-center">
+                    <button
+                      className="btn-primary flex-1 lg:flex-none"
+                      disabled={busy || m.status === "running"}
+                      onClick={() => act(m.id, "start")}
+                    >
+                      <Play size={14} /> 启动
+                    </button>
+                    <button className="btn-secondary flex-1 lg:flex-none" disabled={busy} onClick={() => act(m.id, "stop")}>
+                      <Square size={14} /> 停止
+                    </button>
+                    <button
+                      className="btn-secondary flex-1 lg:flex-none"
+                      disabled={busy}
+                      onClick={() => act(m.id, "restart")}
+                    >
+                      <RotateCcw size={14} /> 重启
+                    </button>
+                    <button className="btn-ghost flex-1 lg:flex-none" onClick={() => showLogs(m.id)}>
+                      <FileText size={14} /> 日志
+                    </button>
+                    <button
+                      className="btn-ghost flex-1 text-rose-600 lg:flex-none"
+                      onClick={() => remove(m.id, m.name)}
+                    >
+                      <Trash2 size={14} /> 删除
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -202,25 +299,43 @@ export default function MountsPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label className="label">名称</label>
-              <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="media_main" />
+              <input
+                className="input"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="media_main"
+              />
             </div>
             <div>
-              <label className="label">Google Drive 账号</label>
-              <select className="input" value={form.account_id} onChange={(e) => setForm({ ...form, account_id: Number(e.target.value) })}>
+              <label className="label">云盘账号</label>
+              <select
+                className="input"
+                value={form.account_id}
+                onChange={(e) => setForm({ ...form, account_id: Number(e.target.value) })}
+              >
                 {accounts.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.name} ({a.remote_name})
+                    {a.name} ({a.provider === "onedrive" ? "OneDrive" : "GDrive"} · {a.remote_name})
                   </option>
                 ))}
               </select>
             </div>
             <div>
               <label className="label">Remote 内路径（可空=根目录）</label>
-              <input className="input" value={form.remote_path} onChange={(e) => setForm({ ...form, remote_path: e.target.value })} placeholder="Media" />
+              <input
+                className="input"
+                value={form.remote_path}
+                onChange={(e) => setForm({ ...form, remote_path: e.target.value })}
+                placeholder="Media"
+              />
             </div>
             <div>
               <label className="label">本地挂载路径</label>
-              <input className="input" value={form.local_path} onChange={(e) => setForm({ ...form, local_path: e.target.value })} />
+              <input
+                className="input"
+                value={form.local_path}
+                onChange={(e) => setForm({ ...form, local_path: e.target.value })}
+              />
             </div>
           </div>
           <div>
@@ -244,7 +359,11 @@ export default function MountsPage() {
             </div>
           </div>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={form.auto_start} onChange={(e) => setForm({ ...form, auto_start: e.target.checked })} />
+            <input
+              type="checkbox"
+              checked={form.auto_start}
+              onChange={(e) => setForm({ ...form, auto_start: e.target.checked })}
+            />
             开机 / 异常自动恢复
           </label>
           <div className="flex justify-end gap-2">

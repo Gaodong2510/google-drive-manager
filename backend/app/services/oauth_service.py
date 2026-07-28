@@ -1,4 +1,4 @@
-"""Google OAuth for Drive + rclone token writing."""
+"""Google / Microsoft OAuth for Drive & OneDrive + rclone token writing."""
 
 from __future__ import annotations
 
@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO = "https://www.googleapis.com/oauth2/v2/userinfo"
+
+# Microsoft identity platform (OneDrive personal + work/school)
+MS_GRAPH_ME = "https://graph.microsoft.com/v1.0/me"
+MS_GRAPH_DRIVE = "https://graph.microsoft.com/v1.0/me/drive"
 
 
 def _utcnow() -> datetime:
@@ -64,12 +68,137 @@ def get_oauth_credentials(db: Session) -> tuple[str, str, str]:
     return client_id, client_secret, redirect_uri
 
 
+def get_ms_oauth_credentials(db: Session) -> tuple[str, str, str, str]:
+    """Return (client_id, client_secret, redirect_uri, tenant)."""
+    settings = get_settings()
+    client_id = get_setting(db, "microsoft_client_id") or settings.microsoft_client_id
+    client_secret_enc = get_setting(db, "microsoft_client_secret_enc")
+    if client_secret_enc:
+        try:
+            client_secret = decrypt_value(client_secret_enc)
+        except Exception:
+            client_secret = ""
+    else:
+        client_secret = settings.microsoft_client_secret
+    redirect_uri = (
+        get_setting(db, "microsoft_redirect_uri")
+        or settings.microsoft_redirect_uri
+        or get_setting(db, "google_redirect_uri")
+        or settings.google_redirect_uri
+    )
+    if not redirect_uri:
+        redirect_uri = f"http://127.0.0.1:{settings.port}/api/oauth/callback"
+    tenant = (
+        get_setting(db, "microsoft_tenant") or settings.microsoft_tenant or "common"
+    ).strip() or "common"
+    return client_id, client_secret, redirect_uri, tenant
+
+
+def _rclone_token_from_oauth(token_data: dict, *, keep_refresh_from: DriveAccount | None = None) -> dict:
+    """Build rclone-compatible OAuth token blob."""
+    expiry = None
+    if "expires_in" in token_data:
+        exp_dt = _utcnow() + timedelta(seconds=int(token_data["expires_in"]))
+        expiry = exp_dt.isoformat().replace("+00:00", "Z")
+    rclone_token = {
+        "access_token": token_data.get("access_token"),
+        "token_type": token_data.get("token_type", "Bearer"),
+        "refresh_token": token_data.get("refresh_token"),
+        "expiry": expiry,
+    }
+    if not rclone_token.get("refresh_token") and keep_refresh_from and keep_refresh_from.token_enc:
+        try:
+            old_tok = json.loads(decrypt_value(keep_refresh_from.token_enc))
+            if old_tok.get("refresh_token"):
+                rclone_token["refresh_token"] = old_tok["refresh_token"]
+        except Exception:
+            pass
+    return rclone_token
+
+
+def _resolve_account_for_state(
+    db: Session,
+    st: OAuthState,
+    *,
+    email: str | None,
+    provider: str,
+) -> DriveAccount:
+    account: DriveAccount | None = None
+    if st.account_id:
+        account = db.query(DriveAccount).filter(DriveAccount.id == st.account_id).first()
+
+    if account is None:
+        default_base = "onedrive" if provider == "onedrive" else "drive"
+        base_name = st.name or (email.split("@")[0] if email else default_base)
+        name = base_name
+        i = 1
+        while db.query(DriveAccount).filter(DriveAccount.name == name).first():
+            i += 1
+            name = f"{base_name}_{i}"
+        remote = st.remote_name or _safe_remote(name)
+        while db.query(DriveAccount).filter(DriveAccount.remote_name == remote).first():
+            remote = f"{remote}_{i}"
+            i += 1
+        account = DriveAccount(
+            name=name,
+            remote_name=remote,
+            email=email,
+            provider=provider,
+            status="pending",
+        )
+        db.add(account)
+        db.flush()
+    else:
+        account.provider = provider
+    return account
+
+
 class OAuthService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.rclone = get_rclone()
 
     def start_auth(
+        self,
+        *,
+        name: str | None = None,
+        remote_name: str | None = None,
+        account_id: int | None = None,
+        provider: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        redirect_after: str | None = None,
+    ) -> dict:
+        # Resolve provider from account or argument
+        resolved = (provider or "drive").strip().lower()
+        if account_id is not None:
+            acc = self.db.query(DriveAccount).filter(DriveAccount.id == account_id).first()
+            if acc:
+                resolved = (getattr(acc, "provider", None) or resolved or "drive").strip().lower()
+        if resolved in ("one_drive", "microsoft", "ms"):
+            resolved = "onedrive"
+        if resolved not in ("drive", "onedrive"):
+            raise ValueError("provider 仅支持 drive 或 onedrive")
+
+        if resolved == "onedrive":
+            return self._start_onedrive_auth(
+                name=name,
+                remote_name=remote_name,
+                account_id=account_id,
+                client_id=client_id,
+                client_secret=client_secret,
+                redirect_after=redirect_after,
+            )
+        return self._start_google_auth(
+            name=name,
+            remote_name=remote_name,
+            account_id=account_id,
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_after=redirect_after,
+        )
+
+    def _start_google_auth(
         self,
         *,
         name: str | None = None,
@@ -101,6 +230,7 @@ class OAuthService:
             name=name,
             remote_name=remote_name,
             redirect_after=redirect_after,
+            provider="drive",
             expires_at=expires,
         )
         self.db.add(st)
@@ -120,6 +250,57 @@ class OAuthService:
         url = f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
         return {"authorize_url": url, "state": state, "account_id": account_id}
 
+    def _start_onedrive_auth(
+        self,
+        *,
+        name: str | None = None,
+        remote_name: str | None = None,
+        account_id: int | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        redirect_after: str | None = None,
+    ) -> dict:
+        cid, csecret, redirect_uri, tenant = get_ms_oauth_credentials(self.db)
+        if client_id:
+            cid = client_id
+        if client_secret:
+            csecret = client_secret
+            set_setting(self.db, "microsoft_client_secret_enc", encrypt_value(client_secret))
+            set_setting(self.db, "microsoft_client_id", client_id or cid)
+
+        if not cid or not csecret:
+            raise ValueError(
+                "请先在「系统设置」中配置 Microsoft（Azure）应用 Client ID 与 Client Secret，"
+                "并将 Redirect URI 登记为面板回调地址。完成后即可像 CloudDrive2 一样网页登录 OneDrive。"
+            )
+
+        state = secrets.token_urlsafe(32)
+        expires = _utcnow() + timedelta(minutes=15)
+        st = OAuthState(
+            state=state,
+            account_id=account_id,
+            name=name,
+            remote_name=remote_name,
+            redirect_after=redirect_after,
+            provider="onedrive",
+            expires_at=expires,
+        )
+        self.db.add(st)
+        self.db.commit()
+
+        settings = get_settings()
+        params = {
+            "client_id": cid,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "response_mode": "query",
+            "scope": settings.microsoft_oauth_scopes,
+            "state": state,
+            "prompt": "select_account",
+        }
+        url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?{urlencode(params)}"
+        return {"authorize_url": url, "state": state, "account_id": account_id}
+
     def handle_callback(self, code: str, state: str) -> DriveAccount:
         st = self.db.query(OAuthState).filter(OAuthState.state == state).first()
         if not st:
@@ -129,9 +310,15 @@ class OAuthService:
             self.db.commit()
             raise ValueError("OAuth state 已过期，请重新授权")
 
+        provider = (getattr(st, "provider", None) or "drive").strip().lower()
+        if provider == "onedrive":
+            return self._handle_onedrive_callback(code, st)
+        return self._handle_google_callback(code, st)
+
+    def _handle_google_callback(self, code: str, st: OAuthState) -> DriveAccount:
         cid, csecret, redirect_uri = get_oauth_credentials(self.db)
         if not cid or not csecret:
-            raise ValueError("OAuth 凭据未配置")
+            raise ValueError("Google OAuth 凭据未配置")
 
         with httpx.Client(timeout=30) as client:
             token_resp = client.post(
@@ -154,59 +341,15 @@ class OAuthService:
             if ui.status_code == 200:
                 email = ui.json().get("email")
 
-        # Build rclone-compatible token JSON
-        # rclone expects: {"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}
-        expiry = None
-        if "expires_in" in token_data:
-            exp_dt = _utcnow() + timedelta(seconds=int(token_data["expires_in"]))
-            expiry = exp_dt.strftime("%Y-%m-%dT%H:%M:%S%z")
-            # rclone often uses RFC3339 with Z
-            expiry = exp_dt.isoformat().replace("+00:00", "Z")
-
-        rclone_token = {
-            "access_token": token_data.get("access_token"),
-            "token_type": token_data.get("token_type", "Bearer"),
-            "refresh_token": token_data.get("refresh_token"),
-            "expiry": expiry,
-        }
-        if not rclone_token.get("refresh_token") and st.account_id:
-            # Keep old refresh token if Google didn't return a new one
-            old = self.db.query(DriveAccount).filter(DriveAccount.id == st.account_id).first()
-            if old and old.token_enc:
-                try:
-                    old_tok = json.loads(decrypt_value(old.token_enc))
-                    if old_tok.get("refresh_token"):
-                        rclone_token["refresh_token"] = old_tok["refresh_token"]
-                except Exception:
-                    pass
-
+        old = (
+            self.db.query(DriveAccount).filter(DriveAccount.id == st.account_id).first()
+            if st.account_id
+            else None
+        )
+        rclone_token = _rclone_token_from_oauth(token_data, keep_refresh_from=old)
         token_json = json.dumps(rclone_token)
 
-        account: DriveAccount | None = None
-        if st.account_id:
-            account = self.db.query(DriveAccount).filter(DriveAccount.id == st.account_id).first()
-
-        if account is None:
-            # Create new account
-            base_name = st.name or (email.split("@")[0] if email else "drive")
-            name = base_name
-            i = 1
-            while self.db.query(DriveAccount).filter(DriveAccount.name == name).first():
-                i += 1
-                name = f"{base_name}_{i}"
-            remote = st.remote_name or _safe_remote(name)
-            while self.db.query(DriveAccount).filter(DriveAccount.remote_name == remote).first():
-                remote = f"{remote}_{i}"
-                i += 1
-            account = DriveAccount(
-                name=name,
-                remote_name=remote,
-                email=email,
-                status="pending",
-            )
-            self.db.add(account)
-            self.db.flush()
-
+        account = _resolve_account_for_state(self.db, st, email=email, provider="drive")
         account.email = email or account.email
         account.client_id_enc = encrypt_value(cid)
         account.client_secret_enc = encrypt_value(csecret)
@@ -218,7 +361,6 @@ class OAuthService:
         self.db.commit()
         self.db.refresh(account)
 
-        # Write rclone config
         try:
             self.rclone.upsert_drive_remote(
                 account.remote_name,
@@ -228,7 +370,6 @@ class OAuthService:
                 root_folder_id=account.root_folder_id,
                 team_drive=account.team_drive,
             )
-            # Probe about
             try:
                 about = self.rclone.about(account.remote_name)
                 account.total_bytes = about.get("total")
@@ -266,6 +407,147 @@ class OAuthService:
         )
         return account
 
+    def _handle_onedrive_callback(self, code: str, st: OAuthState) -> DriveAccount:
+        cid, csecret, redirect_uri, tenant = get_ms_oauth_credentials(self.db)
+        if not cid or not csecret:
+            raise ValueError("Microsoft OAuth 凭据未配置")
+
+        token_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+        with httpx.Client(timeout=45) as client:
+            token_resp = client.post(
+                token_url,
+                data={
+                    "client_id": cid,
+                    "client_secret": csecret,
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+            )
+            if token_resp.status_code != 200:
+                raise ValueError(f"获取 Microsoft Token 失败: {token_resp.text[:400]}")
+            token_data = token_resp.json()
+
+            email = None
+            display = None
+            drive_id = None
+            drive_type = "personal"
+            headers = {"Authorization": f"Bearer {token_data.get('access_token')}"}
+            me = client.get(MS_GRAPH_ME, headers=headers)
+            if me.status_code == 200:
+                mej = me.json()
+                email = mej.get("mail") or mej.get("userPrincipalName")
+                display = mej.get("displayName")
+            drv = client.get(MS_GRAPH_DRIVE, headers=headers)
+            if drv.status_code == 200:
+                dj = drv.json()
+                drive_id = dj.get("id")
+                dtype = (dj.get("driveType") or "personal").lower()
+                # Map Graph driveType → rclone drive_type
+                if dtype in ("personal", "business", "documentlibrary"):
+                    drive_type = dtype
+                elif dtype == "documentLibrary":
+                    drive_type = "documentLibrary"
+                else:
+                    drive_type = dtype or "personal"
+
+        old = (
+            self.db.query(DriveAccount).filter(DriveAccount.id == st.account_id).first()
+            if st.account_id
+            else None
+        )
+        rclone_token = _rclone_token_from_oauth(token_data, keep_refresh_from=old)
+        if not rclone_token.get("refresh_token"):
+            raise ValueError(
+                "未拿到 refresh_token。请在 Azure 应用权限中包含 offline_access，"
+                "并确保授权时同意该权限后重试。"
+            )
+        token_json = json.dumps(rclone_token)
+
+        account = _resolve_account_for_state(
+            self.db,
+            st,
+            email=email,
+            provider="onedrive",
+        )
+        if not st.name and display and not account.email:
+            # keep existing name if already set
+            pass
+        account.email = email or account.email
+        account.client_id_enc = encrypt_value(cid)
+        account.client_secret_enc = encrypt_value(csecret)
+        account.token_enc = encrypt_value(token_json)
+        if drive_id:
+            account.onedrive_drive_id = drive_id
+        account.onedrive_drive_type = drive_type or account.onedrive_drive_type or "personal"
+        account.status = "connected"
+        account.last_error = None
+        account.last_check_at = _utcnow()
+        self.db.add(account)
+        self.db.commit()
+        self.db.refresh(account)
+
+        try:
+            self.rclone.upsert_onedrive_remote(
+                account.remote_name,
+                token_json=token_json,
+                client_id=cid,
+                client_secret=csecret,
+                drive_id=account.onedrive_drive_id,
+                drive_type=account.onedrive_drive_type,
+            )
+            if not account.onedrive_drive_id:
+                detected = self.rclone.detect_onedrive_drive(account.remote_name)
+                if detected:
+                    account.onedrive_drive_id = detected.get("drive_id")
+                    account.onedrive_drive_type = (
+                        detected.get("drive_type") or account.onedrive_drive_type or "personal"
+                    )
+                    self.rclone.upsert_onedrive_remote(
+                        account.remote_name,
+                        token_json=token_json,
+                        client_id=cid,
+                        client_secret=csecret,
+                        drive_id=account.onedrive_drive_id,
+                        drive_type=account.onedrive_drive_type,
+                    )
+            try:
+                about = self.rclone.about(account.remote_name)
+                account.total_bytes = about.get("total")
+                account.used_bytes = about.get("used")
+                account.free_bytes = about.get("free")
+                account.status = "connected"
+            except Exception as exc:
+                account.last_error = str(exc)[:500]
+                logger.warning("onedrive about after oauth failed: %s", exc)
+            self.db.add(account)
+            self.db.commit()
+        except Exception as exc:
+            account.status = "error"
+            account.last_error = str(exc)[:500]
+            self.db.add(account)
+            self.db.commit()
+            log_task(
+                self.db,
+                task_type="oauth",
+                account_id=account.id,
+                status="error",
+                message=f"OneDrive OAuth 成功但写入 rclone 配置失败: {account.name}",
+                detail=str(exc),
+            )
+            raise
+
+        self.db.delete(st)
+        self.db.commit()
+        log_task(
+            self.db,
+            task_type="oauth",
+            account_id=account.id,
+            status="success",
+            message=f"OneDrive 授权成功: {account.name} ({account.email or ''})",
+        )
+        return account
+
     def test_account(self, account: DriveAccount) -> dict:
         # Ensure rclone config is synced
         self.sync_account_to_rclone(account)
@@ -287,17 +569,25 @@ class OAuthService:
         token_json = decrypt_value(account.token_enc)
         cid = decrypt_value(account.client_id_enc) if account.client_id_enc else ""
         csecret = decrypt_value(account.client_secret_enc) if account.client_secret_enc else ""
-        if not cid or not csecret:
+        provider = (getattr(account, "provider", None) or "drive").strip().lower()
+        if provider == "drive" and (not cid or not csecret):
             cid2, csecret2, _ = get_oauth_credentials(self.db)
             cid = cid or cid2
             csecret = csecret or csecret2
-        self.rclone.upsert_drive_remote(
+        elif provider == "onedrive" and (not cid or not csecret):
+            cid2, csecret2, _, _ = get_ms_oauth_credentials(self.db)
+            cid = cid or cid2
+            csecret = csecret or csecret2
+        self.rclone.upsert_remote(
             account.remote_name,
+            provider=provider,
+            token_json=token_json,
             client_id=cid,
             client_secret=csecret,
-            token_json=token_json,
             root_folder_id=account.root_folder_id,
             team_drive=account.team_drive,
+            onedrive_drive_id=getattr(account, "onedrive_drive_id", None),
+            onedrive_drive_type=getattr(account, "onedrive_drive_type", None),
         )
 
     def apply_token(
@@ -307,20 +597,19 @@ class OAuthService:
         account_id: int | None = None,
         name: str | None = None,
         remote_name: str | None = None,
+        provider: str | None = None,
         client_id: str | None = None,
         client_secret: str | None = None,
         root_folder_id: str | None = None,
         team_drive: bool | None = None,
+        onedrive_drive_id: str | None = None,
+        onedrive_drive_type: str | None = None,
         notes: str | None = None,
         test_connection: bool = True,
     ) -> DriveAccount:
-        """Apply pasted rclone/Google token JSON to create or update an account."""
+        """Apply pasted rclone token JSON to create or update an account (drive / onedrive)."""
         token_dict = extract_token_json(token_raw)
         token_json = json.dumps(token_dict, ensure_ascii=False)
-
-        g_cid, g_csecret, _ = get_oauth_credentials(self.db)
-        cid = (client_id or "").strip() or g_cid
-        csecret = (client_secret or "").strip() or g_csecret
 
         account: DriveAccount | None = None
         if account_id is not None:
@@ -328,8 +617,26 @@ class OAuthService:
             if not account:
                 raise ValueError("账号不存在")
 
+        resolved_provider = _normalize_provider(
+            provider
+            or (getattr(account, "provider", None) if account else None)
+            or "drive"
+        )
+
+        g_cid, g_csecret, _ = get_oauth_credentials(self.db)
+        ms_cid, ms_csecret, _, _ = get_ms_oauth_credentials(self.db)
+        cid = (client_id or "").strip()
+        csecret = (client_secret or "").strip()
+        if resolved_provider == "drive":
+            cid = cid or g_cid
+            csecret = csecret or g_csecret
+        elif resolved_provider == "onedrive":
+            cid = cid or ms_cid
+            csecret = csecret or ms_csecret
+
         if account is None:
-            base_name = (name or "drive").strip() or "drive"
+            default_base = "onedrive" if resolved_provider == "onedrive" else "drive"
+            base_name = (name or default_base).strip() or default_base
             display = base_name
             i = 1
             while self.db.query(DriveAccount).filter(DriveAccount.name == display).first():
@@ -345,9 +652,12 @@ class OAuthService:
             account = DriveAccount(
                 name=display,
                 remote_name=remote,
+                provider=resolved_provider,
                 status="pending",
                 root_folder_id=root_folder_id,
-                team_drive=bool(team_drive),
+                team_drive=bool(team_drive) if resolved_provider == "drive" else False,
+                onedrive_drive_id=onedrive_drive_id if resolved_provider == "onedrive" else None,
+                onedrive_drive_type=onedrive_drive_type if resolved_provider == "onedrive" else None,
                 notes=notes,
             )
             self.db.add(account)
@@ -357,10 +667,15 @@ class OAuthService:
                 if self.db.query(DriveAccount).filter(DriveAccount.name == name.strip()).first():
                     raise ValueError("账号名称已存在")
                 account.name = name.strip()
+            account.provider = resolved_provider
             if root_folder_id is not None:
                 account.root_folder_id = root_folder_id or None
             if team_drive is not None:
                 account.team_drive = team_drive
+            if onedrive_drive_id is not None:
+                account.onedrive_drive_id = onedrive_drive_id or None
+            if onedrive_drive_type is not None:
+                account.onedrive_drive_type = onedrive_drive_type or None
             if notes is not None:
                 account.notes = notes
 
@@ -386,9 +701,14 @@ class OAuthService:
             except Exception:
                 pass
 
-        email = _fetch_email(token_dict.get("access_token") or "")
-        if email:
-            account.email = email
+        if resolved_provider == "drive":
+            email = _fetch_email(token_dict.get("access_token") or "")
+            if email:
+                account.email = email
+        else:
+            email = _fetch_ms_email(token_dict.get("access_token") or "")
+            if email:
+                account.email = email
 
         if cid:
             account.client_id_enc = encrypt_value(cid)
@@ -403,14 +723,34 @@ class OAuthService:
         self.db.refresh(account)
 
         try:
-            self.rclone.upsert_drive_remote(
+            self.rclone.upsert_remote(
                 account.remote_name,
+                provider=resolved_provider,
+                token_json=token_json,
                 client_id=cid or "",
                 client_secret=csecret or "",
-                token_json=token_json,
                 root_folder_id=account.root_folder_id,
                 team_drive=account.team_drive,
+                onedrive_drive_id=account.onedrive_drive_id,
+                onedrive_drive_type=account.onedrive_drive_type,
             )
+            # Auto-detect OneDrive drive_id if missing
+            if resolved_provider == "onedrive" and not account.onedrive_drive_id:
+                detected = self.rclone.detect_onedrive_drive(account.remote_name)
+                if detected:
+                    account.onedrive_drive_id = detected.get("drive_id")
+                    account.onedrive_drive_type = detected.get("drive_type") or account.onedrive_drive_type or "personal"
+                    self.rclone.upsert_remote(
+                        account.remote_name,
+                        provider="onedrive",
+                        token_json=token_json,
+                        client_id=cid or "",
+                        client_secret=csecret or "",
+                        onedrive_drive_id=account.onedrive_drive_id,
+                        onedrive_drive_type=account.onedrive_drive_type,
+                    )
+                    self.db.add(account)
+                    self.db.commit()
             if test_connection:
                 try:
                     about = self.rclone.about(account.remote_name)
@@ -441,12 +781,13 @@ class OAuthService:
             )
             raise
 
+        label = "OneDrive" if resolved_provider == "onedrive" else "Google Drive"
         log_task(
             self.db,
             task_type="oauth",
             account_id=account.id,
             status="success" if account.status == "connected" else "warning",
-            message=f"粘贴 Token 授权完成: {account.name}"
+            message=f"粘贴 Token 授权完成 ({label}): {account.name}"
             + (f" ({account.email})" if account.email else ""),
             detail=None if account.status == "connected" else account.last_error,
         )
@@ -455,7 +796,9 @@ class OAuthService:
     def preview_rclone_import(self, config_text: str) -> list[dict[str, Any]]:
         remotes = parse_rclone_config_text(config_text)
         if not remotes:
-            raise ValueError("未找到 type=drive 的 remote，请粘贴完整 rclone 配置或 drive 段")
+            raise ValueError(
+                "未找到 type=drive 或 type=onedrive 的 remote，请粘贴完整 rclone 配置"
+            )
         return remotes
 
     def import_rclone_remotes(
@@ -467,7 +810,7 @@ class OAuthService:
         test_connection: bool = True,
         overwrite: bool = False,
     ) -> list[DriveAccount]:
-        """Import one or more drive remotes from rclone.conf text."""
+        """Import one or more drive/onedrive remotes from rclone.conf text."""
         text = (config_text or "").strip()
         if not text:
             raise ValueError("rclone 配置内容为空")
@@ -481,13 +824,13 @@ class OAuthService:
         previews = parse_rclone_config_text(text)
         available = {p["remote_name"]: p for p in previews}
         if not available:
-            raise ValueError("未找到 type=drive 的 remote")
+            raise ValueError("未找到 type=drive 或 type=onedrive 的 remote")
 
         if selected_remotes:
             targets = []
             for name in selected_remotes:
                 if name not in available:
-                    raise ValueError(f"配置中不存在 drive remote: {name}")
+                    raise ValueError(f"配置中不存在 remote: {name}")
                 targets.append(name)
         else:
             targets = list(available.keys())
@@ -534,8 +877,9 @@ class OAuthService:
         if not cp.has_section(section):
             raise ValueError(f"配置中不存在 remote: {section}")
         rtype = (cp.get(section, "type", fallback="") or "").strip().lower()
-        if rtype != "drive":
-            raise ValueError(f"{section} 不是 drive 类型")
+        if rtype not in ("drive", "onedrive"):
+            raise ValueError(f"{section} 不是 drive/onedrive 类型（当前: {rtype or '空'}）")
+        provider = _normalize_provider(rtype)
 
         token_raw = (cp.get(section, "token", fallback="") or "").strip()
         if not token_raw:
@@ -545,16 +889,19 @@ class OAuthService:
 
         cid = (cp.get(section, "client_id", fallback="") or "").strip()
         csecret = (cp.get(section, "client_secret", fallback="") or "").strip()
-        if not cid or not csecret:
+        if provider == "drive" and (not cid or not csecret):
             g_cid, g_csecret, _ = get_oauth_credentials(self.db)
             cid = cid or g_cid
             csecret = csecret or g_csecret
 
         root = (cp.get(section, "root_folder_id", fallback="") or "").strip() or None
         team_raw = (cp.get(section, "team_drive", fallback="") or "").strip()
-        team_drive = bool(team_raw)
-        if team_raw and not root:
+        team_drive = bool(team_raw) if provider == "drive" else False
+        if team_raw and not root and provider == "drive":
             root = team_raw
+
+        od_drive_id = (cp.get(section, "drive_id", fallback="") or "").strip() or None
+        od_drive_type = (cp.get(section, "drive_type", fallback="") or "").strip() or None
 
         remote = _safe_remote(section)
         existing = (
@@ -566,14 +913,12 @@ class OAuthService:
         display_base = f"{name_prefix}{section}" if name_prefix else section
         if existing:
             account = existing
-            # Keep display name unless empty
         else:
             display = display_base
             i = 1
             while self.db.query(DriveAccount).filter(DriveAccount.name == display).first():
                 i += 1
                 display = f"{display_base}_{i}"
-            # Ensure unique remote
             final_remote = remote
             j = 1
             while (
@@ -591,15 +936,21 @@ class OAuthService:
             self.db.add(account)
             self.db.flush()
 
-        account.root_folder_id = root
+        account.provider = provider
+        account.root_folder_id = root if provider == "drive" else None
         account.team_drive = team_drive
+        account.onedrive_drive_id = od_drive_id if provider == "onedrive" else None
+        account.onedrive_drive_type = od_drive_type if provider == "onedrive" else None
         if cid:
             account.client_id_enc = encrypt_value(cid)
         if csecret:
             account.client_secret_enc = encrypt_value(csecret)
         account.token_enc = encrypt_value(token_json)
 
-        email = _fetch_email(token_dict.get("access_token") or "")
+        if provider == "drive":
+            email = _fetch_email(token_dict.get("access_token") or "")
+        else:
+            email = _fetch_ms_email(token_dict.get("access_token") or "")
         if email:
             account.email = email
 
@@ -610,14 +961,36 @@ class OAuthService:
         self.db.commit()
         self.db.refresh(account)
 
-        self.rclone.upsert_drive_remote(
+        self.rclone.upsert_remote(
             account.remote_name,
+            provider=provider,
+            token_json=token_json,
             client_id=cid or "",
             client_secret=csecret or "",
-            token_json=token_json,
             root_folder_id=account.root_folder_id,
             team_drive=account.team_drive,
+            onedrive_drive_id=account.onedrive_drive_id,
+            onedrive_drive_type=account.onedrive_drive_type,
         )
+
+        if provider == "onedrive" and not account.onedrive_drive_id:
+            detected = self.rclone.detect_onedrive_drive(account.remote_name)
+            if detected:
+                account.onedrive_drive_id = detected.get("drive_id")
+                account.onedrive_drive_type = (
+                    detected.get("drive_type") or account.onedrive_drive_type or "personal"
+                )
+                self.rclone.upsert_remote(
+                    account.remote_name,
+                    provider="onedrive",
+                    token_json=token_json,
+                    client_id=cid or "",
+                    client_secret=csecret or "",
+                    onedrive_drive_id=account.onedrive_drive_id,
+                    onedrive_drive_type=account.onedrive_drive_type,
+                )
+                self.db.add(account)
+                self.db.commit()
 
         if test_connection:
             try:
@@ -718,8 +1091,17 @@ def _normalize_token_dict(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_provider(provider: str | None) -> str:
+    p = (provider or "drive").strip().lower()
+    if p in ("onedrive", "one_drive", "microsoft", "ms"):
+        return "onedrive"
+    if p in ("drive", "gdrive", "google", "google_drive", "googledrive"):
+        return "drive"
+    raise ValueError(f"不支持的云盘类型: {provider}（支持 drive / onedrive）")
+
+
 def parse_rclone_config_text(config_text: str) -> list[dict[str, Any]]:
-    """Parse rclone.conf text and return drive-type remote previews."""
+    """Parse rclone.conf text and return drive/onedrive remote previews."""
     text = (config_text or "").strip()
     if not text:
         raise ValueError("rclone 配置内容为空")
@@ -734,7 +1116,7 @@ def parse_rclone_config_text(config_text: str) -> list[dict[str, Any]]:
     remotes: list[dict[str, Any]] = []
     for section in cp.sections():
         rtype = (cp.get(section, "type", fallback="") or "").strip().lower()
-        if rtype != "drive":
+        if rtype not in ("drive", "onedrive"):
             continue
         token_raw = (cp.get(section, "token", fallback="") or "").strip()
         has_token = False
@@ -746,6 +1128,8 @@ def parse_rclone_config_text(config_text: str) -> list[dict[str, Any]]:
                 has_token = bool(token_raw)
         root = (cp.get(section, "root_folder_id", fallback="") or "").strip() or None
         team = (cp.get(section, "team_drive", fallback="") or "").strip() or None
+        drive_id = (cp.get(section, "drive_id", fallback="") or "").strip() or None
+        drive_type = (cp.get(section, "drive_type", fallback="") or "").strip() or None
         remotes.append(
             {
                 "remote_name": section,
@@ -758,9 +1142,30 @@ def parse_rclone_config_text(config_text: str) -> list[dict[str, Any]]:
                 "root_folder_id": root,
                 "team_drive": team,
                 "scope": (cp.get(section, "scope", fallback="") or "").strip() or None,
+                "drive_id": drive_id,
+                "drive_type": drive_type,
             }
         )
     return remotes
+
+
+def _fetch_ms_email(access_token: str) -> str | None:
+    """Best-effort Microsoft Graph /me for OneDrive tokens."""
+    if not access_token:
+        return None
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(
+                "https://graph.microsoft.com/v1.0/me",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            return data.get("mail") or data.get("userPrincipalName") or data.get("displayName")
+    except Exception as exc:
+        logger.debug("MS userinfo failed: %s", exc)
+        return None
 
 
 def _fetch_email(access_token: str) -> str | None:
