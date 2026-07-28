@@ -51,7 +51,9 @@ export default function Layout() {
           "fixed inset-y-0 left-0 z-40 flex w-[260px] transform flex-col border-r border-slate-200 bg-white transition-transform dark:border-slate-800 dark:bg-slate-900 lg:static lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full"
         )}
-        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+        style={{
+          paddingTop: "max(var(--gdm-sat, 0px), env(safe-area-inset-top, 0px))",
+        }}
       >
         <div className="flex h-16 shrink-0 items-center gap-3 border-b border-slate-200/80 px-5 dark:border-slate-800/80">
           <AppLogo size={38} />
@@ -138,7 +140,10 @@ export default function Layout() {
         */}
         <header
           className="glass sticky top-0 z-20 border-b"
-          style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+          style={{
+            // --gdm-sat injected by Android WebView; env() for iOS / PWA
+            paddingTop: "max(var(--gdm-sat, 0px), env(safe-area-inset-top, 0px))",
+          }}
         >
           <div className="flex h-14 items-center gap-2 px-3 sm:h-16 sm:gap-3 sm:px-6">
             <button

@@ -203,6 +203,34 @@ public class MainActivity extends AppCompatActivity {
         loading.setVisibility(show ? View.VISIBLE : View.GONE);
     }
 
+    /** Push real status-bar height into CSS so the web menu sits below the clock. */
+    private void injectStatusBarCss(WebView view) {
+        int px = 0;
+        try {
+            Insets bars =
+                    ViewCompat.getRootWindowInsets(findViewById(R.id.root)) != null
+                            ? ViewCompat.getRootWindowInsets(findViewById(R.id.root))
+                                    .getInsets(WindowInsetsCompat.Type.statusBars())
+                            : null;
+            if (bars != null) px = bars.top;
+        } catch (Exception ignored) {
+        }
+        if (px <= 0) {
+            // Fallback ~24–28dp on most phones
+            px = dp(28);
+        }
+        float density = getResources().getDisplayMetrics().density;
+        int cssPx = Math.round(px / density); // convert to CSS px roughly via density
+        // Actually WebView uses CSS pixels ≈ density-independent; pass physical/density
+        String js =
+                "(function(){var d=document.documentElement;"
+                        + "d.style.setProperty('--gdm-sat','"
+                        + (px / density)
+                        + "px');"
+                        + "})();";
+        view.evaluateJavascript(js, null);
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private void configureWebView() {
         CookieManager cm = CookieManager.getInstance();
@@ -251,6 +279,7 @@ public class MainActivity extends AppCompatActivity {
                 progress.setVisibility(View.GONE);
                 swipe.setRefreshing(false);
                 showLoading(false);
+                injectStatusBarCss(view);
                 if (url != null && !url.startsWith("data:") && !url.startsWith("about:")) {
                     lastUrl = url;
                 }
