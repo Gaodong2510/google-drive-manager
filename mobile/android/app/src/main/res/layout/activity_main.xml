@@ -17,21 +17,50 @@
         <WebView
             android:id="@+id/webview"
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+            android:layout_height="match_parent"
+            android:background="#0B1220" />
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+    <!-- Loading overlay (avoids white flash) -->
+    <LinearLayout
+        android:id="@+id/loading"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#0B1220"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:indeterminate="true"
+            android:indeterminateTint="#38BDF8" />
+
+        <TextView
+            android:id="@+id/loadingText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="@string/loading"
+            android:textColor="#94A3B8"
+            android:textSize="14sp" />
+    </LinearLayout>
 
     <!-- Thin top progress -->
     <ProgressBar
         android:id="@+id/progress"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
-        android:layout_height="2dp"
+        android:layout_height="3dp"
         android:layout_gravity="top"
-        android:indeterminate="true"
+        android:max="100"
+        android:progress="0"
         android:progressTint="#38BDF8"
+        android:progressBackgroundTint="#1E293B"
         android:visibility="gone" />
 
-    <!-- Floating menu (no title bar) -->
+    <!-- Floating menu -->
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabMenu"
         android:layout_width="wrap_content"
@@ -89,7 +118,6 @@
                 android:textColor="#94A3B8"
                 android:textSize="14sp" />
 
-            <!-- Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

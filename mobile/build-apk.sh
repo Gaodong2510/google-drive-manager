@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build a modern (targetSdk 35) CloudBridge APK for sideload install.
+# No operator domain is baked in — each user enters their own panel URL.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -8,15 +9,12 @@ export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
 export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
 export PATH="$JAVA_HOME/bin:${ANDROID_HOME}/build-tools/35.0.0:$PATH"
 
-# Suggested HTTPS domain prefilled in the connect screen (user can change).
-SUGGESTED_URL="${SUGGESTED_URL:-https://drive.dongwen.cc}"
-
-echo "Building CloudBridge APK  SUGGESTED_URL=$SUGGESTED_URL"
+echo "Building CloudBridge APK (no default server URL)"
 echo "sdk.dir=$ANDROID_HOME" > "$ANDROID_DIR/local.properties"
 
 cd "$ANDROID_DIR"
 chmod +x gradlew
-./gradlew :app:assembleRelease -PSUGGESTED_URL="$SUGGESTED_URL"
+./gradlew :app:assembleRelease
 
 UNSIGNED="$ANDROID_DIR/app/build/outputs/apk/release/app-release-unsigned.apk"
 KEYSTORE="$ANDROID_DIR/cloudbridge-release.jks"
@@ -35,7 +33,6 @@ apksigner sign --ks "$KEYSTORE" --ks-pass pass:cloudbridge --key-pass pass:cloud
 rm -f "$ALIGNED"
 apksigner verify "$OUT"
 
-# Publish for web download if frontend public exists
 PUB="$ROOT/../frontend/public/download"
 mkdir -p "$PUB"
 cp "$OUT" "$PUB/cloudbridge.apk"
@@ -47,4 +44,4 @@ fi
 echo ""
 echo "OK → $OUT"
 aapt dump badging "$OUT" | head -n 3
-echo "Download (if panel running): http://<host>:8787/download/cloudbridge.apk"
+echo "Generic APK: users fill their own HTTPS domain on first launch."

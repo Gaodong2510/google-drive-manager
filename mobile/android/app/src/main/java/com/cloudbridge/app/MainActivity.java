@@ -20,6 +20,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
@@ -39,8 +40,8 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.textfield.TextInputEditText;
 
 /**
- * Fullscreen WebView shell. Each user enters their own panel URL.
- * Legacy plain http://IP:port is migrated away after TLS cutover.
+ * Generic WebView shell — no operator domain baked in.
+ * Each self-hosted user enters their own panel URL on first launch.
  */
 public class MainActivity extends AppCompatActivity {
     private static final String PREFS = "cloudbridge";
@@ -50,6 +51,8 @@ public class MainActivity extends AppCompatActivity {
     private SwipeRefreshLayout swipe;
     private ProgressBar progress;
     private View setup;
+    private View loading;
+    private TextView loadingText;
     private TextInputEditText serverUrl;
     private FloatingActionButton fabMenu;
     private MaterialButton cancelSetupBtn;
@@ -59,6 +62,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Switch from splash theme to main (keeps dark bg, no white flash)
+        setTheme(R.style.Theme_CloudBridge);
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         getWindow().setStatusBarColor(Color.TRANSPARENT);
@@ -77,14 +82,15 @@ public class MainActivity extends AppCompatActivity {
         swipe = findViewById(R.id.swipe);
         progress = findViewById(R.id.progress);
         setup = findViewById(R.id.setup);
+        loading = findViewById(R.id.loading);
+        loadingText = findViewById(R.id.loadingText);
         serverUrl = findViewById(R.id.serverUrl);
         fabMenu = findViewById(R.id.fabMenu);
         cancelSetupBtn = findViewById(R.id.cancelSetupBtn);
 
-        // Suggested HTTPS domain as field hint only (not forced)
-        if (BuildConfig.SUGGESTED_URL != null && !BuildConfig.SUGGESTED_URL.isEmpty()) {
-            serverUrl.setHint(BuildConfig.SUGGESTED_URL);
-        }
+        // Dark WebView — prevent white flash while page paints
+        webView.setBackgroundColor(0xFF0B1220);
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
 
         ViewCompat.setOnApplyWindowInsetsListener(setup, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -106,8 +112,8 @@ public class MainActivity extends AppCompatActivity {
         swipe.setColorSchemeColors(0xFF0EA5E9, 0xFF6366F1);
         swipe.setProgressBackgroundColorSchemeColor(0xFF1E293B);
         swipe.setOnRefreshListener(() -> {
-            if (lastUrl != null && !lastUrl.isEmpty()) {
-                webView.loadUrl(lastUrl);
+            if (lastUrl != null && !lastUrl.isEmpty() && !lastUrl.startsWith("data:")) {
+                openUrl(lastUrl);
             } else {
                 webView.reload();
             }
@@ -148,31 +154,15 @@ public class MainActivity extends AppCompatActivity {
         if (saved == null || saved.trim().isEmpty()) {
             hasServer = false;
             showSetup(null, false);
-            // Pre-fill suggested HTTPS domain for convenience (user can edit)
-            if (BuildConfig.SUGGESTED_URL != null && !BuildConfig.SUGGESTED_URL.isEmpty()) {
-                serverUrl.setText(BuildConfig.SUGGESTED_URL);
-                serverUrl.setSelection(BuildConfig.SUGGESTED_URL.length());
-            }
             return;
         }
         String url = normalizeUrl(saved.trim());
         if (isLegacyIpHttpUrl(url)) {
-            // Auto-migrate known operator HTTPS domain if provided at build time
-            if (BuildConfig.SUGGESTED_URL != null
-                    && BuildConfig.SUGGESTED_URL.startsWith("https://")) {
-                prefs.edit().putString(KEY_URL, BuildConfig.SUGGESTED_URL).apply();
-                hasServer = true;
-                Toast.makeText(this, R.string.migrated_to_https, Toast.LENGTH_LONG).show();
-                openUrl(BuildConfig.SUGGESTED_URL);
-                return;
-            }
+            // Clear only — do NOT inject any operator domain
             prefs.edit().remove(KEY_URL).apply();
             hasServer = false;
             Toast.makeText(this, R.string.legacy_ip_cleared, Toast.LENGTH_LONG).show();
             showSetup(null, false);
-            if (BuildConfig.SUGGESTED_URL != null && !BuildConfig.SUGGESTED_URL.isEmpty()) {
-                serverUrl.setText(BuildConfig.SUGGESTED_URL);
-            }
             return;
         }
         hasServer = true;
@@ -207,6 +197,11 @@ public class MainActivity extends AppCompatActivity {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
+    private void showLoading(boolean show) {
+        if (loading == null) return;
+        loading.setVisibility(show ? View.VISIBLE : View.GONE);
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private void configureWebView() {
         CookieManager cm = CookieManager.getInstance();
@@ -226,11 +221,12 @@ public class MainActivity extends AppCompatActivity {
         s.setSupportZoom(false);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        // Prefer cache to speed up repeat opens
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
         s.setAllowFileAccess(false);
-        s.setJavaScriptCanOpenWindowsAutomatically(true);
+        s.setJavaScriptCanOpenWindowsAutomatically(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            s.setSafeBrowsingEnabled(true);
+            s.setSafeBrowsingEnabled(false); // slightly faster first paint for self-hosted panels
         }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
             try {
@@ -243,12 +239,17 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 progress.setVisibility(View.VISIBLE);
+                progress.setIndeterminate(false);
+                progress.setProgress(8);
+                showLoading(true);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                progress.setProgress(100);
                 progress.setVisibility(View.GONE);
                 swipe.setRefreshing(false);
+                showLoading(false);
                 if (url != null && !url.startsWith("data:") && !url.startsWith("about:")) {
                     lastUrl = url;
                 }
@@ -260,6 +261,7 @@ public class MainActivity extends AppCompatActivity {
                 if (request != null && request.isForMainFrame()) {
                     swipe.setRefreshing(false);
                     progress.setVisibility(View.GONE);
+                    showLoading(false);
                     String desc = "";
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && error != null) {
                         desc = String.valueOf(error.getDescription());
@@ -277,6 +279,7 @@ public class MainActivity extends AppCompatActivity {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
                     swipe.setRefreshing(false);
                     progress.setVisibility(View.GONE);
+                    showLoading(false);
                     showErrorPage(failingUrl, description);
                 }
             }
@@ -285,12 +288,8 @@ public class MainActivity extends AppCompatActivity {
             public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
                 swipe.setRefreshing(false);
                 progress.setVisibility(View.GONE);
-                String msg = getString(R.string.ssl_error);
-                if (error != null) {
-                    msg = msg + "\n(" + error.toString() + ")";
-                }
-                showErrorPage(lastUrl, msg);
-                // Do not proceed with invalid cert blindly
+                showLoading(false);
+                showErrorPage(lastUrl, getString(R.string.ssl_error));
                 handler.cancel();
             }
 
@@ -303,7 +302,17 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
-                progress.setVisibility(newProgress >= 100 ? View.GONE : View.VISIBLE);
+                if (newProgress >= 100) {
+                    progress.setVisibility(View.GONE);
+                    // hide overlay a bit early once content is mostly ready
+                    if (newProgress >= 90) showLoading(false);
+                } else {
+                    progress.setVisibility(View.VISIBLE);
+                    progress.setIndeterminate(false);
+                    progress.setProgress(Math.max(8, newProgress));
+                    if (newProgress < 85) showLoading(true);
+                    else showLoading(false);
+                }
             }
         });
 
@@ -311,23 +320,16 @@ public class MainActivity extends AppCompatActivity {
                 new Object() {
                     @android.webkit.JavascriptInterface
                     public void changeServer() {
-                        runOnUiThread(
-                                () -> showSetup(prefs.getString(KEY_URL, ""), true));
+                        runOnUiThread(() -> showSetup(prefs.getString(KEY_URL, ""), true));
                     }
 
                     @android.webkit.JavascriptInterface
-                    public void openSuggested() {
-                        runOnUiThread(
-                                () -> {
-                                    String sug =
-                                            BuildConfig.SUGGESTED_URL == null
-                                                            || BuildConfig.SUGGESTED_URL.isEmpty()
-                                                    ? "https://drive.dongwen.cc"
-                                                    : BuildConfig.SUGGESTED_URL;
-                                    prefs.edit().putString(KEY_URL, sug).apply();
-                                    hasServer = true;
-                                    openUrl(sug);
-                                });
+                    public void retry() {
+                        runOnUiThread(() -> {
+                            String u = prefs.getString(KEY_URL, "");
+                            if (u != null && !u.isEmpty()) openUrl(u);
+                            else showSetup(null, false);
+                        });
                     }
                 },
                 "CB");
@@ -337,10 +339,6 @@ public class MainActivity extends AppCompatActivity {
         String safeUrl = url == null ? "" : url.replace("&", "&amp;").replace("'", "&#39;");
         String safeDetail =
                 detail == null ? "" : detail.replace("&", "&amp;").replace("<", "&lt;");
-        String sug =
-                (BuildConfig.SUGGESTED_URL == null || BuildConfig.SUGGESTED_URL.isEmpty())
-                        ? "https://drive.dongwen.cc"
-                        : BuildConfig.SUGGESTED_URL;
         String html =
                 "<!DOCTYPE html><html><head><meta charset='utf-8'/>"
                         + "<meta name='viewport' content='width=device-width,initial-scale=1'/>"
@@ -357,21 +355,20 @@ public class MainActivity extends AppCompatActivity {
                         + "button.secondary{background:#1e293b;color:#cbd5e1;}"
                         + "</style></head><body><div class='card'>"
                         + "<h1>无法打开面板</h1>"
-                        + "<p>请使用 <b>HTTPS 域名</b>。公网已关闭明文端口，请填写：</p>"
+                        + "<p>请检查你填写的服务器地址是否正确，以及手机网络是否能访问该服务器。"
+                        + " 自托管用户请填写自己的 HTTPS 域名。</p>"
                         + "<code>"
-                        + sug
-                        + "</code>"
-                        + "<p class='hint'>当前尝试："
                         + safeUrl
-                        + "</p>"
+                        + "</code>"
                         + (safeDetail.isEmpty()
                                 ? ""
                                 : "<p class='hint'>详情：" + safeDetail + "</p>")
-                        + "<button onclick=\"CB.openSuggested()\">打开推荐地址</button>"
+                        + "<button onclick=\"CB.retry()\">重试</button>"
                         + "<button class='secondary' onclick=\"CB.changeServer()\">更换服务器</button>"
                         + "</div></body></html>";
         showBrowser();
-        webView.loadDataWithBaseURL(sug + "/", html, "text/html", "utf-8", null);
+        showLoading(false);
+        webView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
     }
 
     private void showMenu() {
@@ -380,7 +377,6 @@ public class MainActivity extends AppCompatActivity {
                 new String[] {
                     getString(R.string.menu_reload),
                     getString(R.string.menu_change_server),
-                    getString(R.string.menu_open_suggested),
                     getString(R.string.menu_clear_cache),
                     getString(R.string.menu_show_server)
                 };
@@ -392,30 +388,17 @@ public class MainActivity extends AppCompatActivity {
                         items,
                         (d, which) -> {
                             if (which == 0) {
-                                if (!lastUrl.isEmpty() && !lastUrl.startsWith("data:")) {
-                                    webView.loadUrl(lastUrl);
-                                } else if (current != null && !current.isEmpty()) {
-                                    openUrl(current);
-                                } else {
-                                    webView.reload();
-                                }
+                                if (current != null && !current.isEmpty()) openUrl(current);
+                                else webView.reload();
                             } else if (which == 1) {
                                 showSetup(current, true);
                             } else if (which == 2) {
-                                String sug = BuildConfig.SUGGESTED_URL;
-                                if (sug == null || sug.isEmpty()) {
-                                    sug = "https://drive.dongwen.cc";
-                                }
-                                prefs.edit().putString(KEY_URL, sug).apply();
-                                hasServer = true;
-                                openUrl(sug);
-                            } else if (which == 3) {
                                 webView.clearCache(true);
                                 CookieManager.getInstance().removeAllCookies(null);
                                 Toast.makeText(this, R.string.menu_clear_cache, Toast.LENGTH_SHORT)
                                         .show();
                                 if (current != null && !current.isEmpty()) openUrl(current);
-                            } else if (which == 4) {
+                            } else if (which == 3) {
                                 String msg =
                                         (current == null || current.isEmpty())
                                                 ? getString(R.string.no_server_yet)
@@ -435,13 +418,12 @@ public class MainActivity extends AppCompatActivity {
         swipe.setVisibility(View.GONE);
         fabMenu.setVisibility(View.GONE);
         progress.setVisibility(View.GONE);
+        showLoading(false);
         cancelSetupBtn.setVisibility(canCancel && hasServer ? View.VISIBLE : View.GONE);
+        // Always empty for new users; only show existing if editing
         if (current != null && !current.isEmpty() && !isLegacyIpHttpUrl(current)) {
             serverUrl.setText(current);
             serverUrl.setSelection(current.length());
-        } else if (BuildConfig.SUGGESTED_URL != null && !BuildConfig.SUGGESTED_URL.isEmpty()) {
-            serverUrl.setText(BuildConfig.SUGGESTED_URL);
-            serverUrl.setSelection(BuildConfig.SUGGESTED_URL.length());
         } else {
             serverUrl.setText("");
         }
@@ -466,16 +448,11 @@ public class MainActivity extends AppCompatActivity {
                     .setTitle(R.string.reject_ip_http_title)
                     .setMessage(R.string.reject_ip_http)
                     .setPositiveButton(
-                            R.string.use_suggested,
+                            R.string.use_anyway,
                             (d, w) -> {
-                                String sug =
-                                        BuildConfig.SUGGESTED_URL.isEmpty()
-                                                ? "https://drive.dongwen.cc"
-                                                : BuildConfig.SUGGESTED_URL;
-                                serverUrl.setText(sug);
-                                prefs.edit().putString(KEY_URL, sug).apply();
+                                prefs.edit().putString(KEY_URL, url).apply();
                                 hasServer = true;
-                                openUrl(sug);
+                                openUrl(url);
                             })
                     .setNegativeButton(android.R.string.cancel, null)
                     .show();
@@ -491,15 +468,14 @@ public class MainActivity extends AppCompatActivity {
         lastUrl = url;
         showBrowser();
         progress.setVisibility(View.VISIBLE);
+        progress.setProgress(5);
+        showLoading(true);
+        if (loadingText != null) loadingText.setText(R.string.loading);
         webView.loadUrl(url);
     }
 
     private static String normalizeUrl(String raw) {
         String u = raw.trim().replace('\u3000', ' ').trim();
-        // strip trailing spaces / fullwidth slash
-        while (u.endsWith(" ") || u.endsWith("\u3000")) {
-            u = u.substring(0, u.length() - 1);
-        }
         if (!u.startsWith("http://") && !u.startsWith("https://")) {
             if (u.matches("^\\d{1,3}(\\.\\d{1,3}){3}(:\\d+)?(/.*)?$")) {
                 u = "http://" + u;
