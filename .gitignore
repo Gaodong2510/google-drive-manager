@@ -66,3 +66,4 @@ mobile/android/**/build/
 mobile/android/*.jks
 mobile/android/*.keystore
 mobile/*.apk
+*.idsig
