@@ -48,3 +48,21 @@ client_secret*.json
 *.log
 .coverage
 htmlcov/
+
+# Android local / secrets / build
+mobile/android/local.properties
+mobile/android/.gradle/
+mobile/android/**/build/
+mobile/android/*.jks
+mobile/android/*.keystore
+mobile/*.apk
+frontend/public/download/
+frontend/dist/download/
+
+# Android local / secrets
+mobile/android/local.properties
+mobile/android/.gradle/
+mobile/android/**/build/
+mobile/android/*.jks
+mobile/android/*.keystore
+mobile/*.apk

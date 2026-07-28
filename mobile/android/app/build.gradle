@@ -1,0 +1,54 @@
+plugins {
+    id "com.android.application"
+}
+
+def serverUrl = (project.findProperty("SERVER_URL") ?: System.getenv("SERVER_URL") ?: "http://127.0.0.1:8787").toString()
+
+android {
+    namespace "com.cloudbridge.app"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.cloudbridge.app"
+        minSdk 26
+        targetSdk 35
+        versionCode 2
+        versionName "1.1.0"
+        buildConfigField "String", "DEFAULT_SERVER_URL", "\"${serverUrl.replace("\"", "\\\"")}\""
+        resValue "string", "app_name", "云桥"
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
+    }
+
+    packaging {
+        resources {
+            excludes += ["/META-INF/{AL2.0,LGPL2.1}"]
+        }
+    }
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "com.google.android.material:material:1.12.0"
+    implementation "androidx.webkit:webkit:1.12.1"
+    implementation "androidx.activity:activity:1.9.3"
+    implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"
+}
