@@ -14,8 +14,8 @@ android {
         applicationId "com.cloudbridge.app"
         minSdk 26
         targetSdk 35
-        versionCode 3
-        versionName "1.2.0"
+        versionCode 5
+        versionName "1.2.2"
         buildConfigField "String", "DEFAULT_SERVER_URL", "\"${serverUrl.replace("\"", "\\\"")}\""
         resValue "string", "app_name", "云桥"
     }

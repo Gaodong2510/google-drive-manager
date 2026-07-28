@@ -76,7 +76,10 @@ function Pre({ children }: { children: string }) {
 
 export default function HelpPage() {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const callback = useMemo(() => `${origin || "http://你的服务器IP:8787"}/api/oauth/callback`, [origin]);
+  const callback = useMemo(
+    () => `${origin || "https://你的域名"}/api/oauth/callback`,
+    [origin]
+  );
 
   const toc = [
     { id: "connect", label: "连接 Google Drive" },
@@ -479,7 +482,7 @@ systemctl stop google-drive-manager`}</Pre>
               <li>生产环境建议 Nginx/Caddy 反代 + HTTPS</li>
               <li>面板端口尽量仅内网 / VPN 访问，或配合防火墙限制来源 IP</li>
               <li>Client Secret、Refresh Token 已加密存储，切勿把备份文件公开分享</li>
-              <li>云厂商安全组需放行面板端口（默认 8787），仅对可信来源开放更佳</li>
+              <li>生产环境请用 Nginx/Caddy + HTTPS 域名反代，后端仅监听 127.0.0.1</li>
             </ul>
           </Section>
 

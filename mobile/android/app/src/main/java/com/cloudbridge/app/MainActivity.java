@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
 import android.view.WindowManager;
@@ -35,7 +36,8 @@ import com.google.android.material.textfield.TextInputEditText;
 
 /**
  * Fullscreen WebView shell — no title bar.
- * Each user enters their own self-hosted panel URL (not bound to a fixed server).
+ * Each user enters their own panel URL. Legacy http://IP:port is rejected
+ * so installs migrate off plain-IP endpoints after TLS is enabled.
  */
 public class MainActivity extends AppCompatActivity {
     private static final String PREFS = "cloudbridge";
@@ -74,7 +76,6 @@ public class MainActivity extends AppCompatActivity {
         fabMenu = findViewById(R.id.fabMenu);
         cancelSetupBtn = findViewById(R.id.cancelSetupBtn);
 
-        // Keep setup content away from notches / nav bars
         ViewCompat.setOnApplyWindowInsetsListener(setup, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
             v.setPadding(v.getPaddingLeft(), bars.top + dp(24), v.getPaddingRight(), bars.bottom + dp(16));
@@ -82,7 +83,7 @@ public class MainActivity extends AppCompatActivity {
         });
         ViewCompat.setOnApplyWindowInsetsListener(fabMenu, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            FrameLayoutParamsMargin(v, bars.bottom + dp(18), bars.right + dp(12));
+            applyFabMargin(v, bars.bottom + dp(18), bars.right + dp(12));
             return insets;
         });
 
@@ -94,9 +95,7 @@ public class MainActivity extends AppCompatActivity {
 
         findViewById(R.id.saveBtn).setOnClickListener(v -> saveAndOpen());
         cancelSetupBtn.setOnClickListener(v -> {
-            if (hasServer) {
-                showBrowser();
-            }
+            if (hasServer) showBrowser();
         });
         fabMenu.setOnClickListener(v -> showMenu());
 
@@ -121,19 +120,54 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        bootstrapServerUrl();
+    }
+
+    /** Load saved URL, or migrate off legacy http://IP:port entries. */
+    private void bootstrapServerUrl() {
         String saved = prefs.getString(KEY_URL, null);
-        if (saved != null && !saved.trim().isEmpty()) {
-            hasServer = true;
-            openUrl(normalizeUrl(saved.trim()));
-        } else {
+        if (saved == null || saved.trim().isEmpty()) {
             hasServer = false;
             showSetup(null, false);
+            return;
+        }
+        String url = normalizeUrl(saved.trim());
+        if (isLegacyIpHttpUrl(url)) {
+            // Drop stored IP:port so user reconnects via HTTPS domain
+            prefs.edit().remove(KEY_URL).apply();
+            hasServer = false;
+            Toast.makeText(this, R.string.legacy_ip_cleared, Toast.LENGTH_LONG).show();
+            showSetup(null, false);
+            return;
+        }
+        hasServer = true;
+        openUrl(url);
+    }
+
+    /**
+     * True for plain-http panel URLs that use a raw IPv4 host (optionally :8787).
+     * These should be replaced with an HTTPS domain after TLS is enabled.
+     */
+    static boolean isLegacyIpHttpUrl(String url) {
+        try {
+            Uri u = Uri.parse(url);
+            if (u == null) return false;
+            String scheme = u.getScheme();
+            if (scheme == null || !scheme.equalsIgnoreCase("http")) return false;
+            String host = u.getHost();
+            if (host == null || !host.matches("^\\d{1,3}(\\.\\d{1,3}){3}$")) return false;
+            int port = u.getPort();
+            // default http port or historical panel port
+            return port == -1 || port == 80 || port == 8787;
+        } catch (Exception e) {
+            return false;
         }
     }
 
-    private void FrameLayoutParamsMargin(View v, int bottom, int end) {
+    private void applyFabMargin(View v, int bottom, int end) {
         if (!(v.getLayoutParams() instanceof android.widget.FrameLayout.LayoutParams)) return;
-        android.widget.FrameLayout.LayoutParams lp = (android.widget.FrameLayout.LayoutParams) v.getLayoutParams();
+        android.widget.FrameLayout.LayoutParams lp =
+                (android.widget.FrameLayout.LayoutParams) v.getLayoutParams();
         lp.bottomMargin = bottom;
         lp.setMarginEnd(end);
         v.setLayoutParams(lp);
@@ -201,21 +235,32 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showMenu() {
+        final String current = prefs.getString(KEY_URL, "");
         String[] items = new String[]{
                 getString(R.string.menu_reload),
                 getString(R.string.menu_change_server),
-                getString(R.string.menu_clear_cache)
+                getString(R.string.menu_clear_cache),
+                getString(R.string.menu_show_server)
         };
         new AlertDialog.Builder(this, com.google.android.material.R.style.ThemeOverlay_Material3_MaterialAlertDialog)
                 .setItems(items, (d, which) -> {
                     if (which == 0) {
                         webView.reload();
                     } else if (which == 1) {
-                        showSetup(prefs.getString(KEY_URL, ""), true);
+                        showSetup(current, true);
                     } else if (which == 2) {
                         webView.clearCache(true);
                         webView.reload();
                         Toast.makeText(this, R.string.menu_clear_cache, Toast.LENGTH_SHORT).show();
+                    } else if (which == 3) {
+                        String msg = (current == null || current.isEmpty())
+                                ? getString(R.string.no_server_yet)
+                                : current;
+                        new AlertDialog.Builder(this)
+                                .setTitle(R.string.menu_show_server)
+                                .setMessage(msg)
+                                .setPositiveButton(android.R.string.ok, null)
+                                .show();
                     }
                 })
                 .show();
@@ -227,11 +272,11 @@ public class MainActivity extends AppCompatActivity {
         fabMenu.setVisibility(View.GONE);
         progress.setVisibility(View.GONE);
         cancelSetupBtn.setVisibility(canCancel && hasServer ? View.VISIBLE : View.GONE);
-        // Never force someone else's server: empty unless user already saved one
-        if (current != null && !current.isEmpty()) {
+        if (current != null && !current.isEmpty() && !isLegacyIpHttpUrl(current)) {
             serverUrl.setText(current);
             serverUrl.setSelection(current.length());
         } else {
+            // Never prefill IP:port
             serverUrl.setText("");
         }
         serverUrl.requestFocus();
@@ -250,6 +295,11 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         String url = normalizeUrl(raw);
+        if (isLegacyIpHttpUrl(url)) {
+            Toast.makeText(this, R.string.reject_ip_http, Toast.LENGTH_LONG).show();
+            return;
+        }
+        // Soft warn on plain http non-IP (LAN hostname etc.) but allow
         prefs.edit().putString(KEY_URL, url).apply();
         hasServer = true;
         Toast.makeText(this, R.string.url_saved, Toast.LENGTH_SHORT).show();
@@ -264,8 +314,15 @@ public class MainActivity extends AppCompatActivity {
 
     private static String normalizeUrl(String raw) {
         String u = raw.trim();
+        // strip accidental whitespace / fullwidth chars
+        u = u.replace('\u3000', ' ').trim();
         if (!u.startsWith("http://") && !u.startsWith("https://")) {
-            u = "http://" + u;
+            // Prefer https when user omits scheme (domains); IPs still get http then rejected
+            if (u.matches("^\\d{1,3}(\\.\\d{1,3}){3}(:\\d+)?(/.*)?$")) {
+                u = "http://" + u;
+            } else {
+                u = "https://" + u;
+            }
         }
         while (u.endsWith("/") && u.length() > 8) {
             u = u.substring(0, u.length() - 1);
