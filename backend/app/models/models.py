@@ -162,3 +162,36 @@ class MountTrafficDaily(Base):
     sample_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class TransferJobRecord(Base):
+    """Persisted cross-mount copy jobs — survive restarts for resume."""
+
+    __tablename__ = "transfer_jobs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    mode: Mapped[str] = mapped_column(String(32), default="rclone")
+    percent: Mapped[float] = mapped_column(Float, default=0.0)
+    transferred: Mapped[str] = mapped_column(String(64), default="")
+    total: Mapped[str] = mapped_column(String(64), default="")
+    speed: Mapped[str] = mapped_column(String(64), default="")
+    eta: Mapped[str] = mapped_column(String(64), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    # JSON list of source paths
+    src_paths_json: Mapped[str] = mapped_column(Text, default="[]")
+    dest_dir: Mapped[str] = mapped_column(String(1024), default="")
+    current_src: Mapped[str] = mapped_column(String(1024), default="")
+    items_done: Mapped[int] = mapped_column(Integer, default=0)
+    items_total: Mapped[int] = mapped_column(Integer, default=0)
+    files_total: Mapped[int] = mapped_column(Integer, default=0)
+    files_done: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    prefer_rclone: Mapped[bool] = mapped_column(Boolean, default=True)
+    # JSON: [{local_path, remote_path, remote_name, name}, ...]
+    mounts_json: Mapped[str] = mapped_column(Text, default="[]")
+    allowed_roots_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

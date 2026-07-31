@@ -477,7 +477,7 @@ def build_mount_upload_status(
 
 
 def _job_event_kind(status: str) -> str:
-    if status in ("pending", "running"):
+    if status in ("pending", "running", "interrupted"):
         return "copying"
     if status == "success":
         return "copy_success"
@@ -622,7 +622,7 @@ def summarize_uploads(
     active_mounts = sum(1 for m in mounts if m.active)
     speeds = [m.transfer_speed_bps for m in mounts if m.transfer_speed_bps]
     jobs = copy_jobs or []
-    copy_active = sum(1 for j in jobs if j.get("status") in ("pending", "running"))
+    copy_active = sum(1 for j in jobs if j.get("status") in ("pending", "running", "interrupted"))
     copy_errors = sum(1 for j in jobs if j.get("status") == "error")
     any_active = (
         active_mounts > 0

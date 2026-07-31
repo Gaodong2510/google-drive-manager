@@ -309,10 +309,12 @@ class TransferJobOut(BaseModel):
     files_total: int = 0
     files_done: int = 0
     size_bytes: int = 0
+    prefer_rclone: bool = True
     created_at: str | None = None
     updated_at: str | None = None
     finished_at: str | None = None
     can_close: bool = True
+    resumable: bool = False
 
 
 class BrowseResponse(BaseModel):

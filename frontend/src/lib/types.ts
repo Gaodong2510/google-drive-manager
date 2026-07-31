@@ -161,10 +161,12 @@ export type TransferJob = {
   files_total?: number;
   files_done?: number;
   size_bytes?: number;
+  prefer_rclone?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
   finished_at?: string | null;
   can_close?: boolean;
+  resumable?: boolean;
 };
 
 export type MountUpload = {

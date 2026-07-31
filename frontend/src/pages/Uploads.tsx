@@ -92,6 +92,8 @@ function jobStatusLabel(status: string) {
       return "失败";
     case "cancelled":
       return "已取消";
+    case "interrupted":
+      return "已中断·可续传";
     default:
       return status;
   }
@@ -131,6 +133,7 @@ export default function UploadsPage() {
   const [loading, setLoading] = useState(true);
   const [auto, setAuto] = useState(true);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [resuming, setResuming] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -153,6 +156,18 @@ export default function UploadsPage() {
       setError(e.detail || e.message);
     } finally {
       setCancelling(null);
+    }
+  };
+
+  const resumeJob = async (jobId: string) => {
+    setResuming(jobId);
+    try {
+      await api.post(`/files/copy/${jobId}/resume`);
+      await load();
+    } catch (e: any) {
+      setError(e.detail || e.message);
+    } finally {
+      setResuming(null);
     }
   };
 
@@ -415,6 +430,9 @@ export default function UploadsPage() {
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
             {recentCopyJobs.map((job: TransferJob) => {
               const running = job.status === "pending" || job.status === "running";
+              const canResume =
+                !!job.resumable ||
+                ["interrupted", "error", "cancelled"].includes(job.status);
               const srcName = basename(job.current_src || job.src_paths?.[0]);
               return (
                 <li key={job.id} className="px-5 py-3.5">
@@ -429,7 +447,9 @@ export default function UploadsPage() {
                               "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
                             job.status === "error" &&
                               "bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
-                            job.status === "cancelled" && "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                            job.status === "cancelled" && "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+                            job.status === "interrupted" &&
+                              "bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
                           )}
                         >
                           {running && <Loader2 size={10} className="animate-spin" />}
@@ -474,6 +494,17 @@ export default function UploadsPage() {
                           onClick={() => cancelJob(job.id)}
                         >
                           {cancelling === job.id ? "取消中…" : "取消"}
+                        </button>
+                      )}
+                      {!running && canResume && job.status !== "success" && (
+                        <button
+                          type="button"
+                          className="btn-primary !px-2 !py-1 text-xs"
+                          disabled={resuming === job.id}
+                          onClick={() => resumeJob(job.id)}
+                          title="从上次进度继续，已完整文件会跳过"
+                        >
+                          {resuming === job.id ? "续传中…" : "断点续传"}
                         </button>
                       )}
                     </div>
@@ -612,6 +643,10 @@ export default function UploadsPage() {
           <li>MoviePilot 写入挂载目录时，先落盘 VFS 缓存，再由 rclone 回写云盘（排队 / 上传中）。</li>
           <li>上方只展示当前最活跃的一个挂载进度；所有挂载的最近事件合并在下方统一时间线。</li>
           <li>「文件」页跨盘复制会进入「跨盘复制任务」，并写入最近事件。</li>
+          <li>
+            <strong>断点续传</strong>：任务进度写入数据库。服务重启后会自动续传；也可点「断点续传」。
+            rclone 按大小跳过已完整文件；单个大文件若中途中断通常需重传该文件。
+          </li>
           <li>本地 copy 完成 ≠ 云端传完；以待传/上传中为 0 且事件为「成功」为准。</li>
         </ul>
       </div>

@@ -74,8 +74,46 @@ async def lifespan(app: FastAPI):
             tdb.close()
     except Exception:
         logger.exception("Initial traffic sample failed")
+    # Load persisted copy jobs; auto-resume any interrupted by last restart
+    try:
+        from app.services.transfer_service import get_transfer_service
+
+        n = get_transfer_service().resume_interrupted_on_boot()
+        if n:
+            rdb = SessionLocal()
+            try:
+                log_task(
+                    rdb,
+                    task_type="system",
+                    status="info",
+                    message=f"自动断点续传 {n} 个跨盘复制任务",
+                )
+            finally:
+                rdb.close()
+    except Exception:
+        logger.exception("Failed to resume interrupted transfer jobs")
     get_watchdog().start()
     yield
+    # Mark active jobs interrupted so next boot can resume (process is stopping)
+    try:
+        from app.services.transfer_service import get_transfer_service
+
+        svc = get_transfer_service()
+        for job in svc.list_active():
+            job._cancel.set()
+            if job._proc and getattr(job._proc, "poll", lambda: 0)() is None:
+                try:
+                    job._proc.terminate()
+                except Exception:
+                    pass
+            svc._touch(
+                job,
+                status="interrupted",
+                message=(job.message or "") + " · 服务关闭，已标记可续传",
+                finished_at=None,
+            )
+    except Exception:
+        logger.exception("Failed to mark transfers interrupted on shutdown")
     get_watchdog().stop()
     logger.info("Shutdown complete")
 

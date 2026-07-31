@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -216,6 +216,37 @@ def copy_job_cancel(job_id: str, db: Session = Depends(get_db), _: User = Depend
     if not job:
         raise HTTPException(404, "任务不存在或已过期")
     log_task(db, task_type="system", status="warning", message=f"取消复制任务 {job_id}")
+    return TransferJobOut(**job.to_dict())
+
+
+@router.post("/copy/{job_id}/resume", response_model=TransferJobOut)
+def copy_job_resume(job_id: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    """断点续传：从上次 items_done 继续；rclone --size-only 会跳过已完整文件。"""
+    mounts = db.query(MountPoint).options(joinedload(MountPoint.account)).all()
+    roots = [m.local_path for m in mounts]
+    snap = [
+        {
+            "local_path": m.local_path,
+            "remote_path": m.remote_path or "",
+            "remote_name": m.account.remote_name if m.account else None,
+            "name": m.name,
+        }
+        for m in mounts
+    ]
+    try:
+        job = get_transfer_service().resume(job_id, mounts=snap, allowed_roots=roots)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+    log_task(
+        db,
+        task_type="system",
+        status="info",
+        message=f"断点续传任务 {job_id}（从第 {job.items_done + 1}/{job.items_total} 项）",
+    )
     return TransferJobOut(**job.to_dict())
 
 
