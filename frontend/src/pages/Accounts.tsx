@@ -63,6 +63,19 @@ function normalizeSharedDriveId(raw: string): string {
   return s;
 }
 
+/** Mask Shared Drive / folder / drive IDs for display (privacy). */
+function maskId(id?: string | null, keepStart = 4, keepEnd = 4): string {
+  if (!id) return "";
+  const s = String(id).trim();
+  if (!s) return "";
+  if (s.length <= 6) return "****";
+  if (s.length <= keepStart + keepEnd) {
+    return `${s.slice(0, 2)}${"*".repeat(Math.max(4, s.length - 4))}${s.slice(-2)}`;
+  }
+  const mid = Math.min(10, s.length - keepStart - keepEnd);
+  return `${s.slice(0, keepStart)}${"*".repeat(mid)}${s.slice(-keepEnd)}`;
+}
+
 export default function AccountsPage() {
   const [list, setList] = useState<DriveAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -278,7 +291,9 @@ export default function AccountsPage() {
       closeModal();
       await load();
       const sdHint =
-        acc.team_drive && acc.root_folder_id ? ` · 共享盘 ${acc.root_folder_id}` : "";
+        acc.team_drive && acc.root_folder_id
+          ? ` · 共享盘 ${maskId(acc.root_folder_id)}`
+          : "";
       setMsg(
         acc.status === "connected"
           ? `授权成功：${acc.name}${acc.email ? ` (${acc.email})` : ""}${sdHint}`
@@ -305,7 +320,7 @@ export default function AccountsPage() {
       await load();
       setMsg(
         sdId
-          ? `已绑定共享云端硬盘：${acc.name} → ${sdId}（请重新测试连接；已运行的挂载需重启）`
+          ? `已绑定共享云端硬盘：${acc.name} → ${maskId(sdId)}（请重新测试连接；已运行的挂载需重启）`
           : `已清除共享盘绑定：${acc.name}（恢复为「我的云端硬盘」根目录；已运行的挂载需重启）`,
       );
     } catch (e: any) {
@@ -611,8 +626,22 @@ export default function AccountsPage() {
                       <div className="text-[11px] text-slate-400">
                         {a.team_drive ? "共享云端硬盘 ID" : "根目录 ID"}
                       </div>
-                      <div className="mt-0.5 truncate font-mono text-xs font-medium text-slate-700 dark:text-slate-200">
-                        {a.root_folder_id}
+                      <div
+                        className="mt-0.5 truncate font-mono text-xs font-medium text-slate-700 dark:text-slate-200"
+                        title="已打码显示，完整 ID 仅在编辑时可查看"
+                      >
+                        {maskId(a.root_folder_id)}
+                      </div>
+                    </div>
+                  )}
+                  {a.provider === "onedrive" && a.onedrive_drive_id && (
+                    <div className="col-span-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
+                      <div className="text-[11px] text-slate-400">OneDrive drive_id</div>
+                      <div
+                        className="mt-0.5 truncate font-mono text-xs font-medium text-slate-700 dark:text-slate-200"
+                        title="已打码显示"
+                      >
+                        {maskId(a.onedrive_drive_id)}
                       </div>
                     </div>
                   )}
@@ -1132,11 +1161,11 @@ export default function AccountsPage() {
                         token: {r.has_token ? "有" : "无"} · client_id:{" "}
                         {r.has_client_id ? "有" : "无"}
                         {r.team_drive
-                          ? ` · 共享盘: ${r.team_drive}`
+                          ? ` · 共享盘: ${maskId(r.team_drive)}`
                           : r.root_folder_id
-                            ? ` · root: ${r.root_folder_id}`
+                            ? ` · root: ${maskId(r.root_folder_id)}`
                             : ""}
-                        {r.drive_id ? ` · drive_id: ${r.drive_id.slice(0, 12)}…` : ""}
+                        {r.drive_id ? ` · drive_id: ${maskId(r.drive_id)}` : ""}
                         {r.drive_type ? ` · ${r.drive_type}` : ""}
                       </div>
                     </div>

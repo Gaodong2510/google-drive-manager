@@ -181,13 +181,18 @@ def update_account(
     if need_rclone_sync and acc.token_enc:
         try:
             OAuthService(db).sync_account_to_rclone(acc)
+            sd = acc.root_folder_id or ""
+            if len(sd) > 8:
+                sd_mask = f"{sd[:4]}{'*' * min(10, len(sd) - 8)}{sd[-4:]}"
+            else:
+                sd_mask = "****" if sd else ""
             log_task(
                 db,
                 task_type="system",
                 account_id=acc.id,
                 status="info",
                 message=f"已同步 rclone 配置: {acc.name}"
-                + (f" (共享盘 {acc.root_folder_id})" if acc.team_drive and acc.root_folder_id else ""),
+                + (f" (共享盘 {sd_mask})" if acc.team_drive and acc.root_folder_id else ""),
             )
         except Exception as exc:
             acc.last_error = f"账号已更新，但同步 rclone 失败: {exc}"[:500]
