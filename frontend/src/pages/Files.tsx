@@ -28,8 +28,8 @@ import {
 } from "lucide-react";
 import { api, formatBytes, getToken } from "../lib/api";
 import type { FileEntry } from "../lib/types";
-import { Alert, Empty, Loading, PageHeader, StatusBadge } from "../components/ui";
-import { ProviderMark } from "../components/BrandIcons";
+import { Alert, Empty, Loading, Modal, PageHeader, ProgressBar, StatusBadge } from "../components/ui";
+import { ProviderMark, providerLabel as providerLabelFn, normalizeProvider } from "../components/BrandIcons";
 import clsx from "clsx";
 
 type Root = {
@@ -40,6 +40,8 @@ type Root = {
   account_name?: string | null;
   provider?: string;
   remote_path?: string;
+  team_drive?: boolean;
+  remote_name?: string | null;
 };
 
 const VIDEO_EXT = new Set(["mkv", "mp4", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "m2ts", "rmvb"]);
@@ -81,10 +83,28 @@ function formatMtime(ts?: number | null) {
   return d.toLocaleString();
 }
 
-function providerLabel(p?: string) {
-  if (p === "onedrive") return "OneDrive";
-  return "Google Drive";
+function providerLabel(p?: string, hint?: string) {
+  return providerLabelFn(p, hint);
 }
+
+type TransferJob = {
+  id: string;
+  status: string;
+  mode: string;
+  percent: number;
+  transferred: string;
+  total: string;
+  speed: string;
+  eta: string;
+  message: string;
+  error: string;
+  items_done: number;
+  items_total: number;
+  files_total?: number;
+  files_done?: number;
+  size_bytes?: number;
+  can_close?: boolean;
+};
 
 function mediaKind(entry: FileEntry): "image" | "video" | "audio" | null {
   if (entry.is_dir) return null;
@@ -120,9 +140,42 @@ export default function FilesPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [truncated, setTruncated] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [copyOpen, setCopyOpen] = useState(false);
+  /** Selected target mount root local path */
+  const [copyRootPath, setCopyRootPath] = useState("");
+  /** Optional subdir under the mount, e.g. 电影/2024 */
+  const [copySubPath, setCopySubPath] = useState("");
+  const [copyMsg, setCopyMsg] = useState("");
+  const [copyJob, setCopyJob] = useState<TransferJob | null>(null);
+  const [copyJobId, setCopyJobId] = useState<string | null>(null);
   const [preview, setPreview] = useState<FileEntry | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const checkedPaths = useMemo(
+    () => Object.entries(checked).filter(([, v]) => v).map(([k]) => k),
+    [checked]
+  );
+
+  const copyDest = useMemo(() => {
+    const root = (copyRootPath || "").replace(/\/+$/, "");
+    const sub = (copySubPath || "").replace(/^\/+|\/+$/g, "").replace(/\\/g, "/");
+    if (!root) return "";
+    return sub ? `${root}/${sub}` : root;
+  }, [copyRootPath, copySubPath]);
+
+  const pickDefaultCopyRoot = (list: Root[], from?: Root | null) => {
+    // Prefer other mounts: 共享盘/团队盘 first, never default to source mount
+    const others = list.filter((r) => r.path !== from?.path);
+    const pool = others.length ? others : list;
+    const shared =
+      pool.find((r) => r.team_drive) ||
+      pool.find((r) => /共享|团队|shared|team/i.test(r.name + (r.path || ""))) ||
+      pool.find((r) => r.status === "running") ||
+      pool[0];
+    return shared?.path || "";
+  };
 
   const activeRoot = useMemo(
     () => roots.find((r) => path === r.path || path.startsWith(r.path + "/")) || roots[0],
@@ -151,6 +204,29 @@ export default function FilesPage() {
     return { dirs, files, size };
   }, [entries]);
 
+  /** Selection summary for multi-select copy/move UI */
+  const selectionStats = useMemo(() => {
+    const paths = checkedPaths.length ? checkedPaths : selected ? [selected] : [];
+    if (!paths.length) return null;
+    let files = 0;
+    let dirs = 0;
+    let size = 0;
+    for (const p of paths) {
+      const e = entries.find((x) => x.path === p);
+      if (!e) {
+        // still count path even if not in current listing
+        files += 1;
+        continue;
+      }
+      if (e.is_dir) dirs += 1;
+      else {
+        files += 1;
+        size += e.size || 0;
+      }
+    }
+    return { count: paths.length, files, dirs, size };
+  }, [checkedPaths, selected, entries]);
+
   const loadRoots = async () => {
     const r = await api.get<Root[]>("/files/roots");
     setRoots(r);
@@ -163,6 +239,7 @@ export default function FilesPage() {
     setLoading(true);
     setError("");
     setSelected(null);
+    setChecked({});
     try {
       const q = new URLSearchParams({ path: p, sort_by: sortBy, sort_dir: sortDir });
       if (searchTerm) q.set("search", searchTerm);
@@ -182,6 +259,128 @@ export default function FilesPage() {
       setLoading(false);
     }
   };
+
+  const toggleCheck = (p: string) => {
+    setChecked((prev) => ({ ...prev, [p]: !prev[p] }));
+  };
+
+  const openCopyModal = () => {
+    const paths = checkedPaths.length
+      ? checkedPaths
+      : selected
+        ? [selected]
+        : [];
+    if (!paths.length) {
+      setError("请先勾选要复制的文件或文件夹");
+      return;
+    }
+    // Prefer 共享盘 / team drive — do NOT default to personal (first by id)
+    setCopyRootPath(pickDefaultCopyRoot(roots, activeRoot));
+    setCopySubPath("");
+    setCopyMsg("");
+    setCopyJob(null);
+    if (!copyJobId) setBusy(false);
+    setError("");
+    setCopyOpen(true);
+  };
+
+  const closeCopyModal = () => {
+    // Always allowed: job keeps running in background
+    setCopyOpen(false);
+  };
+
+  const submitCopy = async () => {
+    const paths = checkedPaths.length ? checkedPaths : selected ? [selected] : [];
+    if (!paths.length || !copyDest || !copyRootPath) {
+      setError("请选择源与目标挂载");
+      return;
+    }
+    // Ensure dest is under a known mount root
+    const rootOk = roots.some(
+      (r) => copyDest === r.path || copyDest.startsWith(r.path.replace(/\/+$/, "") + "/")
+    );
+    if (!rootOk) {
+      setError("目标路径必须位于某个挂载根目录下");
+      return;
+    }
+    if (paths.some((p) => p === copyDest || copyDest.startsWith(p + "/") || p.startsWith(copyDest + "/"))) {
+      setError("不能复制到自身或其子目录");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setCopyMsg("");
+    setCopyJob(null);
+    try {
+      const res = await api.post<{
+        message: string;
+        mode: string;
+        job_id?: string | null;
+        async_job?: boolean;
+        detail?: TransferJob;
+      }>(`/files/copy`, {
+        src_paths: paths,
+        dest_dir: copyDest,
+        prefer_rclone: true,
+        async_job: true,
+      });
+      setCopyMsg(res.message);
+      setChecked({});
+      if (res.job_id) {
+        setCopyJobId(res.job_id);
+        if (res.detail) setCopyJob(res.detail as TransferJob);
+      } else {
+        setBusy(false);
+      }
+    } catch (e: any) {
+      setError(e.detail || e.message);
+      setCopyMsg("");
+      setBusy(false);
+    }
+  };
+
+  const cancelCopyJob = async () => {
+    if (!copyJobId) return;
+    try {
+      const j = await api.post<TransferJob>(`/files/copy/${copyJobId}/cancel`);
+      setCopyJob(j);
+      setBusy(false);
+      setCopyMsg("已请求取消");
+    } catch (e: any) {
+      setError(e.detail || e.message);
+    }
+  };
+
+  // Poll transfer job progress
+  useEffect(() => {
+    if (!copyJobId) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const j = await api.get<TransferJob>(`/files/copy/${copyJobId}`);
+        if (stopped) return;
+        setCopyJob(j);
+        if (j.status === "success") {
+          setBusy(false);
+          setCopyMsg(j.message || "复制完成");
+          setCopyJobId(null);
+        } else if (j.status === "error" || j.status === "cancelled") {
+          setBusy(false);
+          if (j.status === "error") setError(j.error || j.message || "复制失败");
+          else setCopyMsg(j.message || "已取消");
+          setCopyJobId(null);
+        }
+      } catch {
+        /* ignore transient poll errors */
+      }
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+    };
+  }, [copyJobId]);
 
   useEffect(() => {
     loadRoots().catch((e) => setError(e.detail || e.message));
@@ -287,12 +486,21 @@ export default function FilesPage() {
     <div>
       <PageHeader
         title="文件浏览器"
-        desc="浏览本地挂载目录 · 支持 Google Drive / OneDrive 挂载点"
+        desc="浏览挂载目录 · Google / OneDrive / 123云盘 · 可跨盘复制（优先 rclone 云对云）"
         actions={
           <>
             <button className="btn-secondary" onClick={() => browse(path)} disabled={!path || loading} title="刷新">
               <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
               刷新
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={openCopyModal}
+              disabled={busy || (!checkedPaths.length && !selected)}
+              title="勾选文件后复制到其他挂载（123→团队盘）"
+            >
+              <Copy size={16} /> 复制到…
+              {checkedPaths.length > 0 ? ` (${checkedPaths.length})` : ""}
             </button>
             <button className="btn-primary" onClick={mkdir} disabled={!path || busy}>
               <Plus size={16} /> 新建文件夹
@@ -336,14 +544,18 @@ export default function FilesPage() {
                           : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800/80 dark:hover:bg-slate-800"
                       )}
                     >
-                      <ProviderMark provider={r.provider} size={32} />
+                      <ProviderMark
+                        provider={r.provider}
+                        hint={`${r.name} ${r.account_name || ""} ${r.remote_name || ""}`}
+                        size={32}
+                      />
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
                           <span className="truncate text-sm font-medium">{r.name}</span>
                           <StatusBadge status={r.status} />
                         </div>
                         <div className="truncate text-[11px] text-slate-400">
-                          {providerLabel(r.provider)}
+                          {providerLabel(r.provider, `${r.name} ${r.account_name || ""}`)}
                           {r.account_name ? ` · ${r.account_name}` : ""}
                         </div>
                       </div>
@@ -465,15 +677,26 @@ export default function FilesPage() {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-100 bg-white px-4 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
             <span className="font-mono text-[11px] text-slate-400 truncate max-w-full">{path}</span>
             <span className="ml-auto flex flex-wrap gap-3">
-              <span>
-                <strong className="text-slate-700 dark:text-slate-200">{stats.dirs}</strong> 文件夹
-              </span>
-              <span>
-                <strong className="text-slate-700 dark:text-slate-200">{stats.files}</strong> 文件
-              </span>
-              <span>
-                共 <strong className="text-slate-700 dark:text-slate-200">{formatBytes(stats.size)}</strong>
-              </span>
+              {selectionStats ? (
+                <span className="font-medium text-brand-600 dark:text-brand-400">
+                  已选 <strong>{selectionStats.count}</strong> 项
+                  {selectionStats.dirs > 0 ? ` · ${selectionStats.dirs} 文件夹` : ""}
+                  {selectionStats.files > 0 ? ` · ${selectionStats.files} 文件` : ""}
+                  {selectionStats.size > 0 ? ` · 共 ${formatBytes(selectionStats.size)}` : selectionStats.dirs > 0 ? " · 文件夹大小待扫描" : ""}
+                </span>
+              ) : (
+                <>
+                  <span>
+                    <strong className="text-slate-700 dark:text-slate-200">{stats.dirs}</strong> 文件夹
+                  </span>
+                  <span>
+                    <strong className="text-slate-700 dark:text-slate-200">{stats.files}</strong> 文件
+                  </span>
+                  <span>
+                    共 <strong className="text-slate-700 dark:text-slate-200">{formatBytes(stats.size)}</strong>
+                  </span>
+                </>
+              )}
             </span>
           </div>
 
@@ -496,6 +719,9 @@ export default function FilesPage() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-400 dark:bg-slate-900 dark:text-slate-500">
                   <tr>
+                    <th className="w-10 px-3 py-2.5 text-left font-medium">
+                      <span className="sr-only">选择</span>
+                    </th>
                     <th className="px-4 py-2.5 text-left font-medium">
                       <button className="inline-flex items-center gap-1 hover:text-slate-600" onClick={() => toggleSort("name")}>
                         名称 <SortIcon col="name" />
@@ -519,18 +745,29 @@ export default function FilesPage() {
                     const meta = fileIconMeta(e);
                     const Icon = meta.Icon;
                     const isSel = selected === e.path;
+                    const isChecked = !!checked[e.path];
                     return (
                       <tr
                         key={e.path}
                         className={clsx(
                           "group transition-colors",
-                          isSel
+                          isChecked || isSel
                             ? "bg-brand-50/70 dark:bg-brand-950/30"
                             : "hover:bg-slate-50 dark:hover:bg-slate-800/40"
                         )}
                         onClick={() => setSelected(e.path)}
                         onDoubleClick={() => openEntry(e)}
                       >
+                        <td className="px-3 py-2.5">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                            checked={isChecked}
+                            onChange={() => toggleCheck(e.path)}
+                            onClick={(ev) => ev.stopPropagation()}
+                            title="勾选后可批量复制到其他挂载"
+                          />
+                        </td>
                         <td className="px-4 py-2.5">
                           <button
                             className="flex max-w-full items-center gap-3 text-left"
@@ -693,6 +930,161 @@ export default function FilesPage() {
             </div>
           )}
         </div>
+      )}
+
+      <Modal open={copyOpen} title="复制到其他挂载" onClose={closeCopyModal}>
+        <div className="space-y-4">
+          <Alert type="info">
+            任务在<strong>服务器后台</strong>运行：可以随时关闭弹窗/离开页面，复制不会中断。
+            需要看进度时再打开此对话框（或保持打开看进度条）。
+          </Alert>
+          <div>
+            <div className="label">源（已选 {checkedPaths.length || (selected ? 1 : 0)} 项）</div>
+            <ul className="mt-1 max-h-28 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono text-[11px] dark:border-slate-700 dark:bg-slate-800">
+              {(checkedPaths.length ? checkedPaths : selected ? [selected] : []).map((p) => (
+                <li key={p} className="truncate py-0.5">
+                  {p}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <label className="label">目标挂载（先选盘）</label>
+            <select
+              className="input"
+              value={copyRootPath}
+              disabled={!!copyJobId}
+              onChange={(e) => setCopyRootPath(e.target.value)}
+            >
+              {roots.map((r) => {
+                const p = normalizeProvider(r.provider, `${r.name} ${r.account_name || ""}`);
+                const tag = r.team_drive
+                  ? "共享/团队盘"
+                  : p === "123pan"
+                    ? "123云盘"
+                    : p === "onedrive"
+                      ? "OneDrive"
+                      : "个人盘";
+                return (
+                  <option key={r.id} value={r.path}>
+                    {r.name} · {tag}
+                    {r.status !== "running" ? " [未运行]" : ""}
+                  </option>
+                );
+              })}
+            </select>
+            {copyRootPath && (
+              <p className="mt-1 font-mono text-[11px] text-slate-400">根路径：{copyRootPath}</p>
+            )}
+          </div>
+          <div>
+            <label className="label">
+              子目录（可选）
+              <span className="ml-1 font-normal text-slate-400">相对挂载根，不要填整段 /mnt/…</span>
+            </label>
+            <input
+              className="input font-mono text-xs"
+              value={copySubPath}
+              disabled={!!copyJobId}
+              onChange={(e) => setCopySubPath(e.target.value)}
+              placeholder="例如：电影 或 媒体库/国产剧"
+              spellCheck={false}
+            />
+            <p className="mt-1.5 text-[11px] text-slate-500">
+              最终目标：
+              <code className="ml-1 rounded bg-slate-100 px-1 font-mono text-[11px] dark:bg-slate-800">
+                {copyDest || "—"}
+              </code>
+            </p>
+          </div>
+
+          {(copyJob || copyJobId) && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
+              <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+                <span className="font-medium text-slate-700 dark:text-slate-200">
+                  {copyJob?.message || "准备中…"}
+                </span>
+                <span className="tabular-nums text-slate-500">
+                  {copyJob ? `${copyJob.percent.toFixed(0)}%` : "…"}
+                </span>
+              </div>
+              <ProgressBar
+                value={copyJob?.percent ?? 0}
+                color={
+                  copyJob?.status === "error"
+                    ? "bg-rose-500"
+                    : copyJob?.status === "success"
+                      ? "bg-emerald-500"
+                      : "bg-brand-500"
+                }
+              />
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                {copyJob?.transferred && (
+                  <span>
+                    已传 {copyJob.transferred}
+                    {copyJob.total ? ` / ${copyJob.total}` : ""}
+                  </span>
+                )}
+                {!copyJob?.transferred && (copyJob?.size_bytes ?? 0) > 0 && (
+                  <span>
+                    {(copyJob?.files_total ?? 0) > 0
+                      ? `${copyJob?.files_total} 个文件 · 共 ${formatBytes(copyJob?.size_bytes || 0)}`
+                      : `共 ${formatBytes(copyJob?.size_bytes || 0)}`}
+                  </span>
+                )}
+                {copyJob?.speed && <span>{copyJob.speed}</span>}
+                {copyJob?.eta && <span>ETA {copyJob.eta}</span>}
+                {copyJob && copyJob.items_total > 0 && (
+                  <span>
+                    项目 {copyJob.items_done}/{copyJob.items_total}
+                  </span>
+                )}
+              </div>
+              <p className="mt-2 text-[11px] text-slate-400">
+                关闭后仍可在「上传进度」页查看复制进度与事件
+              </p>
+            </div>
+          )}
+
+          {error && copyOpen && <Alert type="error">{error}</Alert>}
+          {copyMsg && !error && (
+            <Alert type={copyJob?.status === "error" ? "error" : "success"}>{copyMsg}</Alert>
+          )}
+          <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+            {copyJobId && (
+              <button type="button" className="btn-ghost text-rose-600" onClick={cancelCopyJob}>
+                取消任务
+              </button>
+            )}
+            <button type="button" className="btn-secondary" onClick={closeCopyModal}>
+              {copyJobId ? "关闭（后台继续）" : "关闭"}
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={busy || !copyRootPath || !!copyJobId}
+              onClick={submitCopy}
+            >
+              {copyJobId ? "复制进行中…" : busy ? "提交中…" : "开始复制"}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Floating progress chip when modal closed but job running */}
+      {!copyOpen && copyJobId && copyJob && (
+        <button
+          type="button"
+          onClick={() => setCopyOpen(true)}
+          className="fixed bottom-20 right-4 z-[150] max-w-xs rounded-2xl border border-brand-200 bg-white p-3 text-left shadow-lg dark:border-brand-800 dark:bg-slate-900 sm:bottom-6"
+        >
+          <div className="mb-1 text-xs font-semibold text-brand-700 dark:text-brand-300">
+            后台复制 {copyJob.percent.toFixed(0)}%
+          </div>
+          <ProgressBar value={copyJob.percent} />
+          <div className="mt-1 truncate text-[11px] text-slate-500">{copyJob.message}</div>
+          <div className="mt-0.5 text-[10px] text-slate-400">点按查看详情</div>
+        </button>
       )}
 
       {/* Media preview lightbox */}

@@ -46,20 +46,22 @@ class ChangeUsernameResponse(BaseModel):
     token_type: str = "bearer"
 
 
-# ---- Drive / OneDrive accounts ----
-SUPPORTED_PROVIDERS = ("drive", "onedrive")
+# ---- Drive / OneDrive / 123pan accounts ----
+SUPPORTED_PROVIDERS = ("drive", "onedrive", "123pan", "webdav")
 
 
 class DriveAccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     remote_name: str | None = Field(default=None, max_length=64)
-    provider: str = Field(default="drive", description="drive | onedrive")
+    provider: str = Field(default="drive", description="drive | onedrive | 123pan")
     client_id: str | None = None
     client_secret: str | None = None
     root_folder_id: str | None = None
     team_drive: bool = False
     onedrive_drive_id: str | None = None
     onedrive_drive_type: str | None = None
+    webdav_url: str | None = None
+    webdav_vendor: str | None = None
     notes: str | None = None
 
 
@@ -72,6 +74,8 @@ class DriveAccountUpdate(BaseModel):
     team_drive: bool | None = None
     onedrive_drive_id: str | None = None
     onedrive_drive_type: str | None = None
+    webdav_url: str | None = None
+    webdav_vendor: str | None = None
     notes: str | None = None
 
 
@@ -85,6 +89,8 @@ class DriveAccountOut(BaseModel):
     team_drive: bool
     onedrive_drive_id: str | None = None
     onedrive_drive_type: str | None = None
+    webdav_url: str | None = None
+    webdav_vendor: str | None = None
     status: str
     last_check_at: datetime | None = None
     last_error: str | None = None
@@ -99,6 +105,21 @@ class DriveAccountOut(BaseModel):
     running_mounts: int = 0
 
     model_config = {"from_attributes": True}
+
+
+class WebdavConnectRequest(BaseModel):
+    """Connect 123 云盘 (or generic WebDAV) with user/password — no OAuth."""
+
+    name: str = Field(min_length=1, max_length=128)
+    remote_name: str | None = Field(default=None, max_length=64)
+    provider: str = Field(default="123pan", description="123pan | webdav")
+    url: str = Field(min_length=8, max_length=512, description="WebDAV 地址")
+    user: str = Field(min_length=1, max_length=255, description="WebDAV 用户名")
+    password: str = Field(min_length=1, max_length=512, description="WebDAV 密码")
+    vendor: str = Field(default="other", max_length=64)
+    notes: str | None = None
+    test_connection: bool = True
+    account_id: int | None = Field(default=None, description="更新已有账号时传入")
 
 
 class OAuthStartResponse(BaseModel):
@@ -139,6 +160,9 @@ class RcloneRemotePreview(BaseModel):
     scope: str | None = None
     drive_id: str | None = None
     drive_type: str | None = None
+    webdav_url: str | None = None
+    webdav_user: str | None = None
+    webdav_vendor: str | None = None
 
 
 class RcloneImportPreviewResponse(BaseModel):
@@ -247,6 +271,50 @@ class FileEntry(BaseModel):
     ext: str | None = None
 
 
+class FileCopyRequest(BaseModel):
+    """Copy files/dirs between mounts (prefer rclone remote→remote streaming)."""
+
+    src_paths: list[str] = Field(min_length=1)
+    dest_dir: str = Field(min_length=1)
+    # When true, use rclone copy between remotes when possible (minimal disk)
+    prefer_rclone: bool = True
+    # Async job with progress (recommended for large transfers)
+    async_job: bool = True
+
+
+class FileCopyResponse(BaseModel):
+    message: str
+    mode: str = "rclone"  # rclone | local
+    detail: dict[str, Any] = Field(default_factory=dict)
+    job_id: str | None = None
+    async_job: bool = False
+
+
+class TransferJobOut(BaseModel):
+    id: str
+    status: str
+    mode: str = "rclone"
+    percent: float = 0
+    transferred: str = ""
+    total: str = ""
+    speed: str = ""
+    eta: str = ""
+    message: str = ""
+    error: str = ""
+    src_paths: list[str] = Field(default_factory=list)
+    dest_dir: str = ""
+    current_src: str = ""
+    items_done: int = 0
+    items_total: int = 0
+    files_total: int = 0
+    files_done: int = 0
+    size_bytes: int = 0
+    created_at: str | None = None
+    updated_at: str | None = None
+    finished_at: str | None = None
+    can_close: bool = True
+
+
 class BrowseResponse(BaseModel):
     path: str
     parent: str | None
@@ -287,6 +355,37 @@ class SystemStats(BaseModel):
     load_avg: list[float] = Field(default_factory=list)
 
 
+class TrafficMountOut(BaseModel):
+    mount_id: int
+    mount_name: str
+    account_id: int
+    account_name: str | None = None
+    provider: str = "drive"
+    team_drive: bool = False
+    status: str = "stopped"
+    today_bytes: int = 0
+    session_bytes: int = 0
+    rc_ok: bool = False
+    last_sample_at: str | None = None
+
+
+class TrafficHistoryDay(BaseModel):
+    day: str
+    bytes_total: int = 0
+
+
+class TrafficOut(BaseModel):
+    timezone: str = "Asia/Shanghai"
+    day: str
+    today_bytes: int = 0
+    session_bytes: int = 0
+    next_reset_at: str
+    seconds_until_reset: int = 0
+    note: str = ""
+    mounts: list[TrafficMountOut] = Field(default_factory=list)
+    history: list[TrafficHistoryDay] = Field(default_factory=list)
+
+
 class DashboardOut(BaseModel):
     system: SystemStats
     accounts_total: int
@@ -301,6 +400,7 @@ class DashboardOut(BaseModel):
     watchdog_running: bool
     disk_warnings: list[dict[str, Any]] = Field(default_factory=list)
     mounts: list[MountOut] = Field(default_factory=list)
+    traffic: TrafficOut | None = None
 
 
 class UploadEventOut(BaseModel):
@@ -309,6 +409,11 @@ class UploadEventOut(BaseModel):
     path: str
     message: str
     size_bytes: int | None = None
+    job_id: str | None = None
+    percent: float | None = None
+    speed: str | None = None
+    eta: str | None = None
+    source: str = "vfs"  # vfs | copy
 
 
 class MountUploadOut(BaseModel):
@@ -341,6 +446,7 @@ class MountUploadOut(BaseModel):
 
 class UploadStatusOut(BaseModel):
     mounts: list[MountUploadOut] = Field(default_factory=list)
+    copy_jobs: list[TransferJobOut] = Field(default_factory=list)
     summary: dict[str, Any] = Field(default_factory=dict)
 
 

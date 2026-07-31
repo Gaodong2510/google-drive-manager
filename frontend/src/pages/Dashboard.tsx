@@ -6,19 +6,30 @@ import {
   ArrowUp,
   CloudUpload,
   Cpu,
+  Gauge,
   HardDrive,
   MemoryStick,
   Network,
   RefreshCw,
+  RotateCcw,
   Server,
   ShieldCheck,
   Timer,
 } from "lucide-react";
 import { api, formatBytes, formatDuration, formatSpeed } from "../lib/api";
-import type { Dashboard, UploadStatus } from "../lib/types";
+import type { Dashboard, Traffic, UploadStatus } from "../lib/types";
 import { Alert, Loading, PageHeader, ProgressBar, StatusBadge } from "../components/ui";
 import { GoogleDriveIcon, ProviderMark } from "../components/BrandIcons";
 import clsx from "clsx";
+
+function formatResetCountdown(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h} 小时 ${m} 分`;
+  if (m > 0) return `${m} 分`;
+  return `${s} 秒`;
+}
 
 function barColor(pct: number, kind: "default" | "disk" = "default") {
   if (pct >= 90) return "bg-rose-500";
@@ -67,6 +78,8 @@ export default function DashboardPage() {
   const [uploads, setUploads] = useState<UploadStatus | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [resetting, setResetting] = useState(false);
+  const [trafficMsg, setTrafficMsg] = useState("");
 
   const load = async () => {
     try {
@@ -84,6 +97,25 @@ export default function DashboardPage() {
     }
   };
 
+  const resetTraffic = async (mountId?: number) => {
+    const label = mountId != null ? "该挂载今日上传流量" : "全部今日上传流量";
+    if (!confirm(`确认将${label}清零？\n仅影响云桥本地统计与 rclone 会话累计显示。`)) {
+      return;
+    }
+    setResetting(true);
+    setTrafficMsg("");
+    try {
+      const q = mountId != null ? `?mount_id=${mountId}` : "";
+      const t = await api.post<Traffic>(`/traffic/reset${q}`);
+      setData((prev) => (prev ? { ...prev, traffic: t } : prev));
+      setTrafficMsg("今日上传流量已清零");
+    } catch (e: any) {
+      setError(e.detail || e.message);
+    } finally {
+      setResetting(false);
+    }
+  };
+
   useEffect(() => {
     load();
     const t = setInterval(load, 5000);
@@ -94,6 +126,7 @@ export default function DashboardPage() {
   if (!data) return <Alert type="error">{error || "无法加载"}</Alert>;
 
   const s = data.system;
+  const traffic = data.traffic;
 
   return (
     <div>
@@ -181,6 +214,116 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* 本地日流量（北京时间 0 点重置） */}
+      {traffic && (
+        <div className="card mb-4 !p-0 overflow-hidden">
+          <div className="flex flex-col gap-2 border-b border-slate-100 px-5 py-3 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Gauge size={16} className="text-violet-500" />
+              今日上传流量
+              <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-950/50 dark:text-violet-300">
+                北京时间 · {traffic.day}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span className="inline-flex items-center gap-1">
+                <Timer size={12} />
+                {formatResetCountdown(traffic.seconds_until_reset)} 后重置
+              </span>
+              <button
+                type="button"
+                className="btn-ghost !px-2 !py-1 text-xs text-slate-600"
+                disabled={resetting}
+                onClick={() => resetTraffic()}
+                title="手动清零今日本地上传统计"
+              >
+                <RotateCcw size={12} /> 清零今日
+              </button>
+            </div>
+          </div>
+          <div className="grid gap-0 sm:grid-cols-3">
+            <div className="border-b border-slate-100 px-5 py-4 sm:border-b-0 sm:border-r dark:border-slate-800">
+              <div className="text-xs font-medium text-slate-500">今日上传累计（本地）</div>
+              <div className="mt-1 text-2xl font-bold tracking-tight text-violet-600 dark:text-violet-400">
+                {formatBytes(traffic.today_bytes)}
+              </div>
+              <div className="mt-1 text-[11px] text-slate-400">
+                采样增量合计 · 每天 00:00 自动换日
+              </div>
+            </div>
+            <div className="border-b border-slate-100 px-5 py-4 sm:border-b-0 sm:border-r dark:border-slate-800">
+              <div className="text-xs font-medium text-slate-500">rclone 会话累计</div>
+              <div className="mt-1 text-2xl font-bold tracking-tight">
+                {formatBytes(traffic.session_bytes)}
+              </div>
+              <div className="mt-1 text-[11px] text-slate-400">
+                进程启动以来 · 重启挂载才归零
+              </div>
+            </div>
+            <div className="px-5 py-4">
+              <div className="text-xs font-medium text-slate-500">说明</div>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                {traffic.note || "本地统计：按 rclone 会话传输增量累计，每天北京时间 00:00 自动换日清零。"}
+              </p>
+              {trafficMsg && (
+                <p className="mt-2 text-[11px] font-medium text-emerald-600">{trafficMsg}</p>
+              )}
+            </div>
+          </div>
+          {traffic.mounts.length > 0 && (
+            <div className="border-t border-slate-100 dark:border-slate-800">
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {traffic.mounts.map((m) => (
+                  <div
+                    key={m.mount_id}
+                    className="flex flex-col gap-2 px-5 py-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{m.mount_name}</span>
+                        {m.team_drive && (
+                          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                            共享盘
+                          </span>
+                        )}
+                        <StatusBadge status={m.status} />
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-slate-400">
+                        {m.account_name || "—"}
+                        {!m.rc_ok && m.status === "running" ? " · RC 暂不可用" : ""}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums">
+                      <div>
+                        <span className="text-slate-400">今日 </span>
+                        <span className="font-semibold text-violet-600 dark:text-violet-400">
+                          {formatBytes(m.today_bytes)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400">会话 </span>
+                        <span className="font-medium text-slate-700 dark:text-slate-200">
+                          {formatBytes(m.session_bytes)}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-slate-400 hover:text-brand-600"
+                        disabled={resetting}
+                        onClick={() => resetTraffic(m.mount_id)}
+                        title="清零该挂载今日上传流量"
+                      >
+                        清零
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 云盘 + 挂载：合并一栏 */}
       <div className="card mb-4 !p-0 overflow-hidden">
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3 dark:border-slate-800">
@@ -264,6 +407,12 @@ export default function DashboardPage() {
                   {uploads.summary.to_upload}/{uploads.summary.uploading}
                 </span>
               </span>
+              {(uploads.summary.copy_active ?? 0) > 0 && (
+                <span>
+                  <span className="text-slate-400">复制 </span>
+                  <span className="font-medium text-violet-600">{uploads.summary.copy_active}</span>
+                </span>
+              )}
               <span>
                 <span className="text-slate-400">速度 </span>
                 <span className="font-medium">{formatSpeed(uploads.summary.total_speed_bps)}</span>
@@ -392,6 +541,16 @@ export default function DashboardPage() {
                         <span className="text-slate-400">缓存 </span>
                         <span className="font-medium text-slate-700 dark:text-slate-200">
                           {formatBytes(m.cache_size_bytes)}
+                        </span>
+                      </div>
+                    )}
+                    {traffic?.mounts?.find((t) => t.mount_id === m.id) && (
+                      <div>
+                        <span className="text-slate-400">今日上传 </span>
+                        <span className="font-medium text-violet-600 dark:text-violet-400">
+                          {formatBytes(
+                            traffic.mounts.find((t) => t.mount_id === m.id)?.today_bytes || 0
+                          )}
                         </span>
                       </div>
                     )}

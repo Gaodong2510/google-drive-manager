@@ -23,6 +23,7 @@ from app.schemas.schemas import (
     SettingUpdate,
     SystemStats,
     TaskLogOut,
+    TrafficOut,
     UploadStatusOut,
 )
 from app.api.mounts import to_out
@@ -31,7 +32,13 @@ from app.services.mount_service import MountService
 from app.services.oauth_service import get_setting, set_setting
 from app.services.rclone_service import get_rclone
 from app.services.system_monitor import clear_cache_dir, disk_warnings_for_paths, get_cache_info, get_system_stats
-from app.services.upload_monitor import build_mount_upload_status, summarize_uploads
+from app.services.traffic_service import get_traffic_summary, reset_today, sample_all_mounts
+from app.services.transfer_service import get_transfer_service
+from app.services.upload_monitor import (
+    build_mount_upload_status,
+    merge_copy_jobs_into_mounts,
+    summarize_uploads,
+)
 from app.services.watchdog import get_watchdog
 
 router = APIRouter(tags=["system"])
@@ -57,6 +64,16 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)
     rc = get_rclone()
     paths = ["/"] + [m.local_path for m in refreshed] + [str(get_settings().cache_dir)]
     warnings = disk_warnings_for_paths(paths)
+    # Opportunistic traffic sample so dashboard stays fresh even between watchdog ticks
+    traffic = None
+    try:
+        sample_all_mounts(db)
+        traffic = TrafficOut(**get_traffic_summary(db))
+    except Exception:
+        try:
+            traffic = TrafficOut(**get_traffic_summary(db))
+        except Exception:
+            traffic = None
     return DashboardOut(
         system=SystemStats(**stats),
         accounts_total=accounts,
@@ -71,7 +88,31 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)
         watchdog_running=get_watchdog().running,
         disk_warnings=warnings,
         mounts=[to_out(m, svc) for m in refreshed],
+        traffic=traffic,
     )
+
+
+@router.get("/traffic", response_model=TrafficOut)
+def traffic_status(
+    sample: bool = Query(True, description="采样一次再返回"),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    if sample:
+        try:
+            sample_all_mounts(db)
+        except Exception:
+            pass
+    return TrafficOut(**get_traffic_summary(db))
+
+
+@router.post("/traffic/reset", response_model=TrafficOut)
+def traffic_reset(
+    mount_id: int | None = Query(None, description="仅重置指定挂载；省略则重置全部今日上传流量"),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return TrafficOut(**reset_today(db, mount_id=mount_id))
 
 
 @router.get("/system/stats", response_model=SystemStats)
@@ -173,7 +214,7 @@ def update_settings_api(
 
 @router.get("/uploads/status", response_model=UploadStatusOut)
 def uploads_status(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    """VFS / Google Drive 上传进度：解析 rclone 日志，挂载开启 RC 后可叠加实时速度。"""
+    """VFS 回写 + 跨盘复制进度：挂载日志/RC + 后台 copy 任务，统一在最近事件里展示。"""
     svc = MountService(db)
     mounts = db.query(MountPoint).order_by(MountPoint.id).all()
     statuses = []
@@ -192,7 +233,9 @@ def uploads_status(db: Session = Depends(get_db), _: User = Depends(get_current_
                 try_rc=True,
             )
         )
-    return summarize_uploads(statuses)
+    copy_jobs_raw = get_transfer_service().list_recent(limit=30)
+    copy_jobs = merge_copy_jobs_into_mounts(statuses, copy_jobs_raw)
+    return summarize_uploads(statuses, copy_jobs=copy_jobs)
 
 
 @router.get("/tasks", response_model=list[TaskLogOut])

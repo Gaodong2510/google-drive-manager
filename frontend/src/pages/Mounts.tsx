@@ -13,7 +13,7 @@ import {
 import { api, formatBytes, formatDuration, getToken } from "../lib/api";
 import type { DriveAccount, Mount } from "../lib/types";
 import { Alert, Empty, Loading, Modal, PageHeader, StatusBadge } from "../components/ui";
-import { ProviderMark } from "../components/BrandIcons";
+import { ProviderMark, providerLabel, normalizeProvider } from "../components/BrandIcons";
 import clsx from "clsx";
 
 export default function MountsPage() {
@@ -115,7 +115,7 @@ export default function MountsPage() {
     <div>
       <PageHeader
         title="挂载管理"
-        desc="rclone 将 Google Drive / OneDrive 挂载到本地 · 媒体服务器友好"
+        desc="Rclone 将 Google Drive / OneDrive / 123云盘挂载到本地，未来将支持更多"
         actions={
           <>
             <button className="btn-secondary" onClick={load}>
@@ -188,7 +188,11 @@ export default function MountsPage() {
                 <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-stretch lg:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="mb-3 flex flex-wrap items-center gap-2.5">
-                      <ProviderMark provider={m.provider} size={40} />
+                      <ProviderMark
+                        provider={m.provider}
+                        hint={`${m.name} ${m.account_name || ""} ${m.remote_name || ""}`}
+                        size={40}
+                      />
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="text-lg font-semibold tracking-tight">{m.name}</h3>
@@ -196,15 +200,23 @@ export default function MountsPage() {
                           <span className="badge bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                             {m.mode === "media" ? "媒体服务器" : m.mode === "cloud" ? "普通云盘" : "自定义"}
                           </span>
-                          <span
-                            className={
-                              m.provider === "onedrive"
-                                ? "badge bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300"
-                                : "badge bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
-                            }
-                          >
-                            {m.provider === "onedrive" ? "OneDrive" : "Google Drive"}
-                          </span>
+                          {(() => {
+                            const p = normalizeProvider(
+                              m.provider,
+                              `${m.name} ${m.account_name || ""} ${m.remote_name || ""}`
+                            );
+                            const badge =
+                              p === "123pan"
+                                ? "badge bg-orange-50 text-orange-700 dark:bg-orange-950/50 dark:text-orange-300"
+                                : p === "onedrive"
+                                  ? "badge bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300"
+                                  : "badge bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300";
+                            return (
+                              <span className={badge}>
+                                {providerLabel(p)}
+                              </span>
+                            );
+                          })()}
                           {m.watchdog_paused && (
                             <span className="badge bg-rose-100 text-rose-700">Watchdog 暂停</span>
                           )}

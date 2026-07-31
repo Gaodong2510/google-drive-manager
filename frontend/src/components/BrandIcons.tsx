@@ -61,6 +61,45 @@ export function OneDriveIcon({ className, size = 20 }: IconProps) {
 }
 
 /**
+ * 123 云盘 mark — clean cloud + orange accent (no cramped digit glyphs).
+ * WebView-safe pure shapes. Unique gradient ids per size instance.
+ */
+export function Pan123Icon({ className, size = 20 }: IconProps) {
+  const gid = `p123-${size}`;
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className} aria-hidden>
+      <defs>
+        <linearGradient id={gid} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FF8A3D" />
+          <stop offset="100%" stopColor="#FF5A00" />
+        </linearGradient>
+      </defs>
+      <rect x="1" y="1" width="22" height="22" rx="6" fill={`url(#${gid})`} />
+      <path
+        d="M7.2 15.2h9.8c1.7 0 3-1.25 3-2.85 0-1.45-1.05-2.65-2.45-2.85C17.2 7.7 15.7 6.4 13.85 6.4c-1.55 0-2.9.85-3.55 2.1-.45-.3-1-.45-1.6-.45-1.55 0-2.8 1.2-2.8 2.7 0 .2.02.4.06.58C4.5 11.55 3.5 12.7 3.5 14.1c0 1.4 1.15 2.55 2.55 2.55.35 0 .7-.06 1.05-.2.05-.08.1-.16.1-.25z"
+        fill="white"
+        fillOpacity="0.95"
+      />
+      <circle cx="9" cy="13.6" r="1.15" fill="#FF6A00" />
+      <circle cx="12" cy="13.6" r="1.15" fill="#FF6A00" />
+      <circle cx="15" cy="13.6" r="1.15" fill="#FF6A00" />
+    </svg>
+  );
+}
+
+/** Normalize provider id for icon lookup (handle aliases / missing values). */
+export function normalizeProvider(provider?: string | null, hint?: string | null): string {
+  const p = (provider || "").trim().toLowerCase();
+  if (p === "onedrive" || p === "one_drive" || p === "microsoft") return "onedrive";
+  if (p === "123pan" || p === "webdav" || p === "123" || p === "pan123") return "123pan";
+  if (p === "drive" || p === "gdrive" || p === "google" || p === "google_drive") return "drive";
+  const h = (hint || "").toLowerCase();
+  if (/123|webdav/.test(h)) return "123pan";
+  if (/onedrive|one drive/.test(h)) return "onedrive";
+  return p || "drive";
+}
+
+/**
  * CloudBridge product mark — cloud linked to local mount (bridge).
  * Unique gradient ids so multiple instances on one page don't clash.
  */
@@ -138,27 +177,56 @@ export function ProviderIcon({
   provider,
   size = 20,
   className,
+  hint,
 }: {
   provider?: string | null;
   size?: number;
   className?: string;
+  /** Optional name/path hint when provider field is missing or wrong */
+  hint?: string | null;
 }) {
-  if (provider === "onedrive") {
+  const p = normalizeProvider(provider, hint);
+  if (p === "onedrive") {
     return <OneDriveIcon size={size} className={className} />;
   }
+  if (p === "123pan") {
+    return <Pan123Icon size={size} className={className} />;
+  }
   return <GoogleDriveIcon size={size} className={className} />;
+}
+
+export function providerLabel(provider?: string | null, hint?: string | null): string {
+  const p = normalizeProvider(provider, hint);
+  if (p === "onedrive") return "OneDrive";
+  if (p === "123pan") return "123云盘";
+  return "Google Drive";
 }
 
 export function ProviderMark({
   provider,
   size = 36,
   className,
+  hint,
 }: {
   provider?: string | null;
   size?: number;
   className?: string;
+  hint?: string | null;
 }) {
-  const isOd = provider === "onedrive";
+  const p = normalizeProvider(provider, hint);
+  const isOd = p === "onedrive";
+  const is123 = p === "123pan";
+  // 123 icon already has its own tile; render full-bleed without nested box tint
+  if (is123) {
+    return (
+      <div
+        className={clsx("flex shrink-0 items-center justify-center overflow-hidden rounded-xl shadow-sm", className)}
+        style={{ width: size, height: size }}
+      >
+        <ProviderIcon provider={p} size={size} />
+      </div>
+    );
+  }
   return (
     <div
       className={clsx(
@@ -170,7 +238,7 @@ export function ProviderMark({
       )}
       style={{ width: size, height: size }}
     >
-      <ProviderIcon provider={provider} size={Math.round(size * 0.52)} />
+      <ProviderIcon provider={p} size={Math.round(size * 0.55)} />
     </div>
   );
 }

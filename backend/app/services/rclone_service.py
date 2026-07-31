@@ -145,21 +145,85 @@ class RcloneService:
             cp.set(section, "drive_type", drive_type)
         self._save_config(cp)
 
+    def obscure_password(self, password: str) -> str:
+        """Return rclone-obscured password for conf storage."""
+        binary = self.find_binary()
+        if not binary:
+            # Store plain; rclone also accepts some plain forms but conf expects obscure
+            return password
+        r = run_cmd([binary, "obscure", password], timeout=15)
+        if r.returncode != 0:
+            logger.warning("rclone obscure failed: %s", (r.stderr or r.stdout or "")[:200])
+            return password
+        out = (r.stdout or "").strip()
+        return out or password
+
+    def upsert_webdav_remote(
+        self,
+        remote_name: str,
+        *,
+        url: str,
+        user: str,
+        password: str,
+        vendor: str = "other",
+        password_obscured: bool = False,
+    ) -> None:
+        """Write an rclone type=webdav remote (123 云盘等)."""
+        remote_name = validate_remote_name(remote_name)
+        url = (url or "").strip()
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("WebDAV URL 必须以 http:// 或 https:// 开头")
+        user = (user or "").strip()
+        if not user:
+            raise ValueError("WebDAV 用户名不能为空")
+        if not password:
+            raise ValueError("WebDAV 密码不能为空")
+        vendor = (vendor or "other").strip() or "other"
+        obscured = password if password_obscured else self.obscure_password(password)
+
+        cp = self._load_config()
+        section = remote_name
+        if not cp.has_section(section):
+            cp.add_section(section)
+        for key in list(cp.options(section)):
+            if key not in ("type",):
+                cp.remove_option(section, key)
+        cp.set(section, "type", "webdav")
+        cp.set(section, "url", url)
+        cp.set(section, "vendor", vendor)
+        cp.set(section, "user", user)
+        cp.set(section, "pass", obscured)
+        self._save_config(cp)
+
     def upsert_remote(
         self,
         remote_name: str,
         *,
         provider: str,
-        token_json: str,
+        token_json: str = "",
         client_id: str = "",
         client_secret: str = "",
         root_folder_id: str | None = None,
         team_drive: bool = False,
         onedrive_drive_id: str | None = None,
         onedrive_drive_type: str | None = None,
+        webdav_url: str | None = None,
+        webdav_user: str | None = None,
+        webdav_password: str | None = None,
+        webdav_vendor: str | None = None,
+        webdav_password_obscured: bool = False,
     ) -> None:
         provider = (provider or "drive").strip().lower()
-        if provider == "onedrive":
+        if provider in ("123pan", "webdav"):
+            self.upsert_webdav_remote(
+                remote_name,
+                url=webdav_url or "",
+                user=webdav_user or "",
+                password=webdav_password or token_json or "",
+                vendor=webdav_vendor or "other",
+                password_obscured=webdav_password_obscured,
+            )
+        elif provider == "onedrive":
             self.upsert_onedrive_remote(
                 remote_name,
                 token_json=token_json,
@@ -177,6 +241,43 @@ class RcloneService:
                 root_folder_id=root_folder_id,
                 team_drive=team_drive,
             )
+
+    def copy_remote_to_remote(
+        self,
+        src: str,
+        dst: str,
+        *,
+        transfers: int = 4,
+        checkers: int = 8,
+        timeout: int = 0,
+    ) -> tuple[int, str, str]:
+        """rclone copy src dst (e.g. remote:path remote2:path). Returns (code, stdout, stderr)."""
+        binary = self.find_binary()
+        if not binary:
+            raise RuntimeError("rclone 未安装")
+        # Basic injection guards
+        if "\n" in src or "\r" in src or "\n" in dst or "\r" in dst:
+            raise ValueError("非法路径")
+        args = [
+            binary,
+            "copy",
+            src,
+            dst,
+            "--config",
+            str(self.config_path),
+            "--transfers",
+            str(max(1, min(transfers, 16))),
+            "--checkers",
+            str(max(1, min(checkers, 32))),
+            "--retries",
+            "5",
+            "--low-level-retries",
+            "10",
+            "-P",
+        ]
+        # timeout 0 = no limit (long transfers)
+        r = run_cmd(args, timeout=timeout or 86400, env=self.env_with_config())
+        return r.returncode, r.stdout or "", r.stderr or ""
 
     def detect_onedrive_drive(self, remote_name: str) -> dict[str, str] | None:
         """Try to pick the first OneDrive drive via rclone backend drives."""

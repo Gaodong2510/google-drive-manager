@@ -551,11 +551,20 @@ class OAuthService:
     def test_account(self, account: DriveAccount) -> dict:
         # Ensure rclone config is synced
         self.sync_account_to_rclone(account)
-        about = self.rclone.test_connection(account.remote_name)
-        data = about["about"]
-        account.total_bytes = data.get("total")
-        account.used_bytes = data.get("used")
-        account.free_bytes = data.get("free")
+        provider = (getattr(account, "provider", None) or "drive").strip().lower()
+        data: dict = {}
+        try:
+            about = self.rclone.test_connection(account.remote_name)
+            data = about.get("about") or {}
+            account.total_bytes = data.get("total")
+            account.used_bytes = data.get("used")
+            account.free_bytes = data.get("free")
+        except Exception as exc:
+            if provider not in ("123pan", "webdav"):
+                raise
+            # 123/WebDAV 常不支持 about 配额，用列目录验证
+            self.rclone.lsd(account.remote_name, "")
+            data = {"ok": True, "note": f"about 不可用（{exc}），lsd 成功"}
         account.status = "connected"
         account.last_check_at = _utcnow()
         account.last_error = None
@@ -564,12 +573,33 @@ class OAuthService:
         return data
 
     def sync_account_to_rclone(self, account: DriveAccount) -> None:
+        provider = (getattr(account, "provider", None) or "drive").strip().lower()
+        if provider in ("123pan", "webdav"):
+            if not account.token_enc:
+                raise ValueError("账号尚未配置 WebDAV 密码")
+            url = (getattr(account, "webdav_url", None) or "").strip()
+            if not url:
+                raise ValueError("账号缺少 WebDAV URL")
+            user = (account.email or "").strip()
+            if not user:
+                raise ValueError("账号缺少 WebDAV 用户名")
+            password, obscured = _decode_webdav_secret(decrypt_value(account.token_enc))
+            vendor = (getattr(account, "webdav_vendor", None) or "other").strip() or "other"
+            self.rclone.upsert_webdav_remote(
+                account.remote_name,
+                url=url,
+                user=user,
+                password=password,
+                vendor=vendor,
+                password_obscured=obscured,
+            )
+            return
+
         if not account.token_enc:
             raise ValueError("账号尚未完成授权（无 Token）")
         token_json = decrypt_value(account.token_enc)
         cid = decrypt_value(account.client_id_enc) if account.client_id_enc else ""
         csecret = decrypt_value(account.client_secret_enc) if account.client_secret_enc else ""
-        provider = (getattr(account, "provider", None) or "drive").strip().lower()
         if provider == "drive" and (not cid or not csecret):
             cid2, csecret2, _ = get_oauth_credentials(self.db)
             cid = cid or cid2
@@ -589,6 +619,142 @@ class OAuthService:
             onedrive_drive_id=getattr(account, "onedrive_drive_id", None),
             onedrive_drive_type=getattr(account, "onedrive_drive_type", None),
         )
+
+    def connect_webdav(
+        self,
+        *,
+        name: str,
+        url: str,
+        user: str,
+        password: str,
+        remote_name: str | None = None,
+        provider: str = "123pan",
+        vendor: str = "other",
+        notes: str | None = None,
+        test_connection: bool = True,
+        account_id: int | None = None,
+    ) -> DriveAccount:
+        """Create or update a 123pan/WebDAV account and write rclone conf."""
+        resolved = _normalize_provider(provider)
+        if resolved not in ("123pan", "webdav"):
+            raise ValueError("connect_webdav 仅支持 123pan / webdav")
+        url = (url or "").strip()
+        user = (user or "").strip()
+        password = password or ""
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("WebDAV URL 必须以 http:// 或 https:// 开头")
+        if not user:
+            raise ValueError("请填写 WebDAV 用户名")
+        if not password:
+            raise ValueError("请填写 WebDAV 密码")
+        vendor = (vendor or "other").strip() or "other"
+
+        account: DriveAccount | None = None
+        if account_id is not None:
+            account = self.db.query(DriveAccount).filter(DriveAccount.id == account_id).first()
+            if not account:
+                raise ValueError("账号不存在")
+
+        if account is None:
+            base_name = (name or ("123云盘" if resolved == "123pan" else "WebDAV")).strip()
+            display = base_name
+            i = 1
+            while self.db.query(DriveAccount).filter(DriveAccount.name == display).first():
+                i += 1
+                display = f"{base_name}_{i}"
+            remote = _safe_remote(remote_name or display)
+            j = 1
+            base_remote = remote
+            while self.db.query(DriveAccount).filter(DriveAccount.remote_name == remote).first():
+                j += 1
+                remote = f"{base_remote}_{j}"
+            account = DriveAccount(
+                name=display,
+                remote_name=remote,
+                provider=resolved,
+                status="pending",
+                notes=notes,
+            )
+            self.db.add(account)
+            self.db.flush()
+        else:
+            if name and name.strip() and name.strip() != account.name:
+                if self.db.query(DriveAccount).filter(DriveAccount.name == name.strip()).first():
+                    raise ValueError("账号名称已存在")
+                account.name = name.strip()
+            account.provider = resolved
+            if notes is not None:
+                account.notes = notes
+
+        account.email = user
+        account.webdav_url = url
+        account.webdav_vendor = vendor
+        account.token_enc = encrypt_value(_encode_webdav_secret(password, obscured=False))
+        account.team_drive = False
+        account.root_folder_id = None
+        account.status = "connected"
+        account.last_error = None
+        account.last_check_at = _utcnow()
+        self.db.add(account)
+        self.db.commit()
+        self.db.refresh(account)
+
+        try:
+            self.rclone.upsert_webdav_remote(
+                account.remote_name,
+                url=url,
+                user=user,
+                password=password,
+                vendor=vendor,
+                password_obscured=False,
+            )
+            if test_connection:
+                try:
+                    about = self.rclone.about(account.remote_name)
+                    account.total_bytes = about.get("total")
+                    account.used_bytes = about.get("used")
+                    account.free_bytes = about.get("free")
+                    account.status = "connected"
+                    account.last_error = None
+                except Exception as exc:
+                    # WebDAV about may not report quota; try lsd as health check
+                    try:
+                        self.rclone.lsd(account.remote_name, "")
+                        account.status = "connected"
+                        account.last_error = None
+                        logger.info("webdav about unavailable, lsd ok: %s", account.remote_name)
+                    except Exception as exc2:
+                        account.status = "error"
+                        account.last_error = str(exc2)[:500]
+                        logger.warning("webdav test failed: %s / %s", exc, exc2)
+            self.db.add(account)
+            self.db.commit()
+            self.db.refresh(account)
+        except Exception as exc:
+            account.status = "error"
+            account.last_error = str(exc)[:500]
+            self.db.add(account)
+            self.db.commit()
+            log_task(
+                self.db,
+                task_type="oauth",
+                account_id=account.id,
+                status="error",
+                message=f"WebDAV 配置写入失败: {account.name}",
+                detail=str(exc),
+            )
+            raise
+
+        label = "123云盘" if resolved == "123pan" else "WebDAV"
+        log_task(
+            self.db,
+            task_type="oauth",
+            account_id=account.id,
+            status="success" if account.status == "connected" else "warning",
+            message=f"{label} 已连接: {account.name} ({user})",
+            detail=None if account.status == "connected" else account.last_error,
+        )
+        return account
 
     def apply_token(
         self,
@@ -797,7 +963,7 @@ class OAuthService:
         remotes = parse_rclone_config_text(config_text)
         if not remotes:
             raise ValueError(
-                "未找到 type=drive 或 type=onedrive 的 remote，请粘贴完整 rclone 配置"
+                "未找到 type=drive / onedrive / webdav 的 remote，请粘贴完整 rclone 配置"
             )
         return remotes
 
@@ -810,7 +976,7 @@ class OAuthService:
         test_connection: bool = True,
         overwrite: bool = False,
     ) -> list[DriveAccount]:
-        """Import one or more drive/onedrive remotes from rclone.conf text."""
+        """Import drive/onedrive/webdav remotes from rclone.conf text."""
         text = (config_text or "").strip()
         if not text:
             raise ValueError("rclone 配置内容为空")
@@ -824,7 +990,7 @@ class OAuthService:
         previews = parse_rclone_config_text(text)
         available = {p["remote_name"]: p for p in previews}
         if not available:
-            raise ValueError("未找到 type=drive 或 type=onedrive 的 remote")
+            raise ValueError("未找到 type=drive / onedrive / webdav 的 remote")
 
         if selected_remotes:
             targets = []
@@ -877,8 +1043,73 @@ class OAuthService:
         if not cp.has_section(section):
             raise ValueError(f"配置中不存在 remote: {section}")
         rtype = (cp.get(section, "type", fallback="") or "").strip().lower()
-        if rtype not in ("drive", "onedrive"):
-            raise ValueError(f"{section} 不是 drive/onedrive 类型（当前: {rtype or '空'}）")
+        if rtype not in ("drive", "onedrive", "webdav"):
+            raise ValueError(f"{section} 不是 drive/onedrive/webdav 类型（当前: {rtype or '空'}）")
+
+        # WebDAV / 123pan import path
+        if rtype == "webdav":
+            url = (cp.get(section, "url", fallback="") or "").strip()
+            user = (cp.get(section, "user", fallback="") or "").strip()
+            pass_raw = (cp.get(section, "pass", fallback="") or "").strip()
+            vendor = (cp.get(section, "vendor", fallback="") or "other").strip() or "other"
+            if not url or not user or not pass_raw:
+                raise ValueError(f"{section} WebDAV 需包含 url / user / pass")
+            provider = "123pan" if "123" in url.lower() else "webdav"
+            # pass in conf is usually already rclone-obscured; store as-is and mark obscured
+            remote = _safe_remote(section)
+            existing = (
+                self.db.query(DriveAccount).filter(DriveAccount.remote_name == remote).first()
+            )
+            if existing and not overwrite:
+                raise ValueError(f"remote「{remote}」已存在，勾选覆盖后再导入")
+            display_base = f"{name_prefix}{section}" if name_prefix else section
+            if existing:
+                account = existing
+                account.provider = provider
+            else:
+                display = display_base
+                i = 1
+                while self.db.query(DriveAccount).filter(DriveAccount.name == display).first():
+                    i += 1
+                    display = f"{display_base}_{i}"
+                account = DriveAccount(
+                    name=display,
+                    remote_name=remote,
+                    provider=provider,
+                    status="pending",
+                )
+                self.db.add(account)
+                self.db.flush()
+            account.email = user
+            account.webdav_url = url
+            account.webdav_vendor = vendor
+            # conf 中的 pass 通常已是 rclone obscure 后的值
+            account.token_enc = encrypt_value(_encode_webdav_secret(pass_raw, obscured=True))
+            account.status = "connected"
+            account.last_error = None
+            account.last_check_at = _utcnow()
+            self.db.add(account)
+            self.db.commit()
+            self.db.refresh(account)
+            self.rclone.upsert_webdav_remote(
+                account.remote_name,
+                url=url,
+                user=user,
+                password=pass_raw,
+                vendor=vendor,
+                password_obscured=True,
+            )
+            if test_connection:
+                try:
+                    self.test_account(account)
+                except Exception as exc:
+                    account.status = "error"
+                    account.last_error = str(exc)[:500]
+                    self.db.add(account)
+                    self.db.commit()
+            self.db.refresh(account)
+            return account
+
         provider = _normalize_provider(rtype)
 
         token_raw = (cp.get(section, "token", fallback="") or "").strip()
@@ -1016,6 +1247,25 @@ def _safe_remote(name: str) -> str:
     return (s or "drive")[:48]
 
 
+def _encode_webdav_secret(password: str, *, obscured: bool) -> str:
+    return json.dumps({"p": password, "o": bool(obscured)}, ensure_ascii=False)
+
+
+def _decode_webdav_secret(raw: str) -> tuple[str, bool]:
+    """Return (password, is_obscured). Plain string treated as not obscured."""
+    text = (raw or "").strip()
+    if not text:
+        return "", False
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict) and "p" in data:
+                return str(data.get("p") or ""), bool(data.get("o"))
+        except json.JSONDecodeError:
+            pass
+    return text, False
+
+
 def extract_token_json(raw: str) -> dict[str, Any]:
     """Parse token from rclone authorize output or plain JSON."""
     text = (raw or "").strip()
@@ -1097,11 +1347,15 @@ def _normalize_provider(provider: str | None) -> str:
         return "onedrive"
     if p in ("drive", "gdrive", "google", "google_drive", "googledrive"):
         return "drive"
-    raise ValueError(f"不支持的云盘类型: {provider}（支持 drive / onedrive）")
+    if p in ("123pan", "123", "123云盘", "pan123"):
+        return "123pan"
+    if p in ("webdav", "dav"):
+        return "webdav"
+    raise ValueError(f"不支持的云盘类型: {provider}（支持 drive / onedrive / 123pan / webdav）")
 
 
 def parse_rclone_config_text(config_text: str) -> list[dict[str, Any]]:
-    """Parse rclone.conf text and return drive/onedrive remote previews."""
+    """Parse rclone.conf text and return drive/onedrive/webdav remote previews."""
     text = (config_text or "").strip()
     if not text:
         raise ValueError("rclone 配置内容为空")
@@ -1116,24 +1370,34 @@ def parse_rclone_config_text(config_text: str) -> list[dict[str, Any]]:
     remotes: list[dict[str, Any]] = []
     for section in cp.sections():
         rtype = (cp.get(section, "type", fallback="") or "").strip().lower()
-        if rtype not in ("drive", "onedrive"):
+        if rtype not in ("drive", "onedrive", "webdav"):
             continue
         token_raw = (cp.get(section, "token", fallback="") or "").strip()
+        pass_raw = (cp.get(section, "pass", fallback="") or "").strip()
+        user_raw = (cp.get(section, "user", fallback="") or "").strip()
+        url_raw = (cp.get(section, "url", fallback="") or "").strip()
         has_token = False
-        if token_raw:
-            try:
-                extract_token_json(token_raw)
-                has_token = True
-            except ValueError:
-                has_token = bool(token_raw)
+        if rtype == "webdav":
+            has_token = bool(pass_raw and user_raw and url_raw)
+            # Map generic webdav to 123pan when URL looks like 123
+            display_type = "123pan" if "123" in url_raw.lower() else "webdav"
+        else:
+            display_type = rtype
+            if token_raw:
+                try:
+                    extract_token_json(token_raw)
+                    has_token = True
+                except ValueError:
+                    has_token = bool(token_raw)
         root = (cp.get(section, "root_folder_id", fallback="") or "").strip() or None
         team = (cp.get(section, "team_drive", fallback="") or "").strip() or None
         drive_id = (cp.get(section, "drive_id", fallback="") or "").strip() or None
         drive_type = (cp.get(section, "drive_type", fallback="") or "").strip() or None
+        vendor = (cp.get(section, "vendor", fallback="") or "").strip() or None
         remotes.append(
             {
                 "remote_name": section,
-                "type": rtype,
+                "type": display_type if rtype == "webdav" else rtype,
                 "has_token": has_token,
                 "has_client_id": bool((cp.get(section, "client_id", fallback="") or "").strip()),
                 "has_client_secret": bool(
@@ -1144,6 +1408,9 @@ def parse_rclone_config_text(config_text: str) -> list[dict[str, Any]]:
                 "scope": (cp.get(section, "scope", fallback="") or "").strip() or None,
                 "drive_id": drive_id,
                 "drive_type": drive_type,
+                "webdav_url": url_raw or None,
+                "webdav_user": user_raw or None,
+                "webdav_vendor": vendor,
             }
         )
     return remotes

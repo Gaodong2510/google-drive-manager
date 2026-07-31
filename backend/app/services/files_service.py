@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 import os
 import shutil
@@ -10,6 +11,8 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.services.safe_exec import validate_path
+
+logger = logging.getLogger(__name__)
 
 
 def _is_under(child: Path, parent: Path) -> bool:
@@ -154,3 +157,135 @@ def resolve_download(path: str, allowed_roots: list[str]) -> Path:
 def guess_media_type(path: Path) -> str:
     mt, _ = mimetypes.guess_type(str(path))
     return mt or "application/octet-stream"
+
+
+def _match_mount(path: Path, mounts: list[Any]) -> Any | None:
+    """Pick the longest matching mount.local_path under path."""
+    best = None
+    best_len = -1
+    for m in mounts:
+        try:
+            root = validate_path(m.local_path)
+        except ValueError:
+            continue
+        if path == root or _is_under(path, root):
+            n = len(str(root))
+            if n > best_len:
+                best = m
+                best_len = n
+    return best
+
+
+def local_path_to_remote(path: str, mounts: list[Any]) -> tuple[str, str, Any]:
+    """Map a local mount path to (remote_name, remote_rel_path, mount)."""
+    p = validate_path(path)
+    mount = _match_mount(p, mounts)
+    if not mount or not mount.account:
+        raise ValueError(f"路径不在任何挂载下: {path}")
+    root = validate_path(mount.local_path)
+    if p == root:
+        rel = ""
+    else:
+        rel = str(p.relative_to(root)).replace("\\", "/")
+    base = (mount.remote_path or "").strip().strip("/")
+    if base and rel:
+        remote_rel = f"{base}/{rel}"
+    elif base:
+        remote_rel = base
+    else:
+        remote_rel = rel
+    return mount.account.remote_name, remote_rel, mount
+
+
+def copy_between_mounts(
+    src_paths: list[str],
+    dest_dir: str,
+    mounts: list[Any],
+    allowed_roots: list[str],
+    *,
+    prefer_rclone: bool = True,
+) -> dict[str, Any]:
+    """
+    Copy files/dirs from src_paths into dest_dir (must be under a mount).
+    Prefer rclone remote→remote (minimal disk); fallback to local shutil via FUSE.
+    """
+    from app.services.rclone_service import get_rclone
+
+    dest = ensure_within_roots(dest_dir, allowed_roots)
+    if not dest.exists() or not dest.is_dir():
+        raise ValueError(f"目标目录不存在: {dest_dir}")
+
+    dest_remote, dest_rel, dest_mount = local_path_to_remote(str(dest), mounts)
+    rclone = get_rclone()
+    results: list[dict[str, Any]] = []
+    mode_used = "rclone"
+
+    for src in src_paths:
+        sp = ensure_within_roots(src, allowed_roots)
+        if not sp.exists():
+            raise FileNotFoundError(f"源不存在: {src}")
+        src_remote, src_rel, src_mount = local_path_to_remote(str(sp), mounts)
+        name = sp.name
+
+        # Same mount + same path noop
+        if str(sp) == str(dest / name):
+            results.append({"src": src, "status": "skip", "reason": "源与目标相同"})
+            continue
+
+        if prefer_rclone and src_remote and dest_remote and rclone.is_installed():
+            # File: copy parent/file into dest; Dir: copy dir into dest/name
+            if sp.is_dir():
+                src_spec = f"{src_remote}:{src_rel}" if src_rel else f"{src_remote}:"
+                # trailing slash semantics: copy contents into dest_dir/name
+                dst_rel = f"{dest_rel}/{name}".strip("/") if dest_rel else name
+                dst_spec = f"{dest_remote}:{dst_rel}"
+            else:
+                # rclone copy file: source is file path, dest is directory
+                src_spec = f"{src_remote}:{src_rel}"
+                dst_spec = f"{dest_remote}:{dest_rel}" if dest_rel else f"{dest_remote}:"
+
+            logger.info("rclone copy %s → %s", src_spec, dst_spec)
+            code, out, err = rclone.copy_remote_to_remote(src_spec, dst_spec)
+            if code != 0:
+                # fallback local
+                logger.warning("rclone copy failed (%s), fallback local: %s", code, err[:300])
+                mode_used = "local"
+                _local_copy(sp, dest / name if sp.is_dir() else dest / name)
+                results.append(
+                    {
+                        "src": src,
+                        "status": "ok",
+                        "mode": "local",
+                        "note": f"rclone 失败后本地复制: {(err or out)[:200]}",
+                    }
+                )
+            else:
+                results.append({"src": src, "status": "ok", "mode": "rclone", "dst": dst_spec})
+        else:
+            mode_used = "local"
+            target = dest / name
+            _local_copy(sp, target)
+            results.append({"src": src, "status": "ok", "mode": "local"})
+
+    ok = sum(1 for r in results if r.get("status") == "ok")
+    return {
+        "mode": mode_used,
+        "copied": ok,
+        "total": len(src_paths),
+        "results": results,
+        "dest_dir": str(dest),
+        "dest_mount": dest_mount.name if dest_mount else None,
+    }
+
+
+def _local_copy(src: Path, dest: Path) -> None:
+    if src.is_dir():
+        if dest.exists():
+            # merge into existing
+            for item in src.iterdir():
+                _local_copy(item, dest / item.name)
+        else:
+            shutil.copytree(src, dest, dirs_exist_ok=True)
+    else:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)

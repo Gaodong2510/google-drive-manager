@@ -63,6 +63,17 @@ async def lifespan(app: FastAPI):
         restore_autostart_mounts()
     except Exception:
         logger.exception("Failed to restore mounts on startup")
+    # Baseline traffic counters (do not dump multi-day session into "today")
+    try:
+        from app.services.traffic_service import sample_all_mounts
+
+        tdb = SessionLocal()
+        try:
+            sample_all_mounts(tdb)
+        finally:
+            tdb.close()
+    except Exception:
+        logger.exception("Initial traffic sample failed")
     get_watchdog().start()
     yield
     get_watchdog().stop()
@@ -135,7 +146,15 @@ def create_app() -> FastAPI:
                 return FileResponse(file_path, headers=headers)
             index = static_dir / "index.html"
             if index.is_file():
-                return FileResponse(index)
+                # index.html must never be cached long — otherwise App/WebView
+                # keeps old asset hashes and misses new UI (e.g. 123 云盘).
+                return FileResponse(
+                    index,
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                    },
+                )
             return JSONResponse({"detail": "Frontend not built"}, status_code=404)
     else:
 

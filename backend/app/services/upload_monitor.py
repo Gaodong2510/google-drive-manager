@@ -108,10 +108,16 @@ def _parse_ts(line: str) -> str | None:
 @dataclass
 class UploadEvent:
     time: str | None
-    event: str  # queued | uploading | success | failed | copied | stats
+    event: str  # queued | uploading | success | failed | copied | stats | copy_*
     path: str
     message: str
     size_bytes: int | None = None
+    # Optional fields for cross-mount copy jobs (shown in same timeline)
+    job_id: str | None = None
+    percent: float | None = None
+    speed: str | None = None
+    eta: str | None = None
+    source: str = "vfs"  # vfs | copy
 
 
 @dataclass
@@ -172,6 +178,11 @@ class MountUploadStatus:
                     "path": e.path,
                     "message": e.message,
                     "size_bytes": e.size_bytes,
+                    "job_id": e.job_id,
+                    "percent": e.percent,
+                    "speed": e.speed,
+                    "eta": e.eta,
+                    "source": e.source,
                 }
                 for e in self.recent_events
             ],
@@ -465,20 +476,171 @@ def build_mount_upload_status(
     return st
 
 
-def summarize_uploads(mounts: list[MountUploadStatus]) -> dict[str, Any]:
+def _job_event_kind(status: str) -> str:
+    if status in ("pending", "running"):
+        return "copying"
+    if status == "success":
+        return "copy_success"
+    if status == "cancelled":
+        return "copy_cancelled"
+    return "copy_failed"
+
+
+def transfer_job_to_event(job: Any) -> UploadEvent:
+    """Convert a TransferJob (dataclass or dict-like) into a timeline event."""
+    if hasattr(job, "to_dict"):
+        d = job.to_dict()
+    elif isinstance(job, dict):
+        d = job
+    else:
+        d = {
+            "id": getattr(job, "id", ""),
+            "status": getattr(job, "status", "running"),
+            "percent": getattr(job, "percent", 0),
+            "transferred": getattr(job, "transferred", ""),
+            "total": getattr(job, "total", ""),
+            "speed": getattr(job, "speed", ""),
+            "eta": getattr(job, "eta", ""),
+            "message": getattr(job, "message", ""),
+            "error": getattr(job, "error", ""),
+            "src_paths": getattr(job, "src_paths", []) or [],
+            "dest_dir": getattr(job, "dest_dir", ""),
+            "current_src": getattr(job, "current_src", ""),
+            "items_done": getattr(job, "items_done", 0),
+            "items_total": getattr(job, "items_total", 0),
+            "updated_at": getattr(job, "updated_at", None),
+            "created_at": getattr(job, "created_at", None),
+        }
+
+    status = str(d.get("status") or "running")
+    src_paths = d.get("src_paths") or []
+    current = d.get("current_src") or (src_paths[0] if src_paths else "")
+    path = str(current or d.get("dest_dir") or "copy")
+    name = Path(path).name if path else "copy"
+    dest = str(d.get("dest_dir") or "")
+    pct = d.get("percent")
+    try:
+        pct_f = float(pct) if pct is not None else None
+    except (TypeError, ValueError):
+        pct_f = None
+
+    parts: list[str] = []
+    msg = str(d.get("message") or "").strip()
+    if msg:
+        parts.append(msg)
+    if d.get("transferred") and d.get("total"):
+        parts.append(f"{d['transferred']} / {d['total']}")
+    if d.get("error") and status in ("error", "copy_failed"):
+        parts.append(str(d["error"])[:200])
+    if dest:
+        parts.append(f"→ {dest}")
+    message = " · ".join(parts) if parts else f"复制 {name}"
+
+    ts = d.get("updated_at") or d.get("created_at")
+    if hasattr(ts, "isoformat"):
+        ts = ts.isoformat()
+    elif ts is not None:
+        ts = str(ts)
+
+    return UploadEvent(
+        time=ts,
+        event=_job_event_kind(status),
+        path=path,
+        message=message,
+        size_bytes=None,
+        job_id=str(d.get("id") or "") or None,
+        percent=pct_f,
+        speed=str(d.get("speed") or "") or None,
+        eta=str(d.get("eta") or "") or None,
+        source="copy",
+    )
+
+
+def merge_copy_jobs_into_mounts(
+    mounts: list[MountUploadStatus],
+    jobs: list[Any],
+    *,
+    max_copy_events_per_mount: int = 20,
+) -> list[dict[str, Any]]:
+    """Inject copy-job events into dest mount timelines; return copy_jobs payloads."""
+    # Longest local_path first so nested mounts match correctly
+    by_path = sorted(mounts, key=lambda m: len(m.local_path or ""), reverse=True)
+    copy_jobs_out: list[dict[str, Any]] = []
+
+    for job in jobs:
+        d = job.to_dict() if hasattr(job, "to_dict") else dict(job)
+        copy_jobs_out.append(d)
+        ev = transfer_job_to_event(job)
+        dest = str(d.get("dest_dir") or "")
+        target: MountUploadStatus | None = None
+        if dest:
+            dest_n = dest.rstrip("/")
+            for m in by_path:
+                root = (m.local_path or "").rstrip("/")
+                if not root:
+                    continue
+                if dest_n == root or dest_n.startswith(root + "/"):
+                    target = m
+                    break
+        if target is None and by_path:
+            # Fallback: match source path
+            srcs = d.get("src_paths") or []
+            for src in srcs:
+                src_n = str(src).rstrip("/")
+                for m in by_path:
+                    root = (m.local_path or "").rstrip("/")
+                    if root and (src_n == root or src_n.startswith(root + "/")):
+                        target = m
+                        break
+                if target:
+                    break
+        if target is None:
+            continue
+        # Prepend active/recent copy events (newest-first list)
+        target.recent_events = [ev] + [
+            e for e in target.recent_events if not (e.job_id and e.job_id == ev.job_id)
+        ]
+        if len(target.recent_events) > 80:
+            target.recent_events = target.recent_events[:80]
+        # Mark mount active while copy is running into it
+        if d.get("status") in ("pending", "running"):
+            target.active = True
+
+    # Cap copy events density is already via list_recent; keep signature used
+    _ = max_copy_events_per_mount
+    return copy_jobs_out
+
+
+def summarize_uploads(
+    mounts: list[MountUploadStatus],
+    *,
+    copy_jobs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     total_to_upload = sum(m.to_upload for m in mounts)
     total_uploading = sum(m.uploading for m in mounts)
     total_errors = sum(m.errors for m in mounts)
     active_mounts = sum(1 for m in mounts if m.active)
     speeds = [m.transfer_speed_bps for m in mounts if m.transfer_speed_bps]
+    jobs = copy_jobs or []
+    copy_active = sum(1 for j in jobs if j.get("status") in ("pending", "running"))
+    copy_errors = sum(1 for j in jobs if j.get("status") == "error")
+    any_active = (
+        active_mounts > 0
+        or total_to_upload > 0
+        or total_uploading > 0
+        or copy_active > 0
+    )
     return {
         "mounts": [m.to_dict() for m in mounts],
+        "copy_jobs": jobs,
         "summary": {
             "to_upload": total_to_upload,
             "uploading": total_uploading,
-            "errors": total_errors,
+            "errors": total_errors + copy_errors,
             "active_mounts": active_mounts,
             "total_speed_bps": sum(speeds) if speeds else 0.0,
-            "any_active": active_mounts > 0 or total_to_upload > 0 or total_uploading > 0,
+            "any_active": any_active,
+            "copy_active": copy_active,
+            "copy_total": len(jobs),
         },
     }

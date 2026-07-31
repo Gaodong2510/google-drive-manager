@@ -94,29 +94,61 @@ export function Modal({
   onClose,
   children,
   wide,
+  /** When true, clicking the dimmed backdrop closes the modal (default true). */
+  closeOnBackdrop = true,
 }: {
   open: boolean;
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   wide?: boolean;
+  closeOnBackdrop?: boolean;
 }) {
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    // Prevent background scroll while modal open (esp. App WebView)
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+    <div
+      className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-900/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      role="presentation"
+      onClick={() => {
+        if (closeOnBackdrop) onClose();
+      }}
+    >
       <div
+        role="dialog"
+        aria-modal="true"
         className={clsx(
-          "max-h-[92vh] w-full overflow-auto rounded-t-2xl border border-slate-200/80 bg-white p-5 shadow-2xl animate-slide-up dark:border-slate-700 dark:bg-slate-900 sm:rounded-2xl",
+          "flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl border border-slate-200/80 bg-white shadow-2xl animate-slide-up dark:border-slate-700 dark:bg-slate-900 sm:rounded-2xl",
           wide ? "max-w-3xl" : "max-w-lg"
         )}
+        onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5 dark:border-slate-800">
           <h3 className="text-lg font-semibold tracking-tight">{title}</h3>
-          <button className="btn-ghost !p-2" onClick={onClose}>
+          <button
+            type="button"
+            className="btn-ghost !p-2"
+            onClick={onClose}
+            aria-label="关闭"
+          >
             <X size={18} />
           </button>
         </div>
-        {children}
+        <div className="min-h-0 flex-1 overflow-auto px-5 py-4">{children}</div>
       </div>
     </div>
   );

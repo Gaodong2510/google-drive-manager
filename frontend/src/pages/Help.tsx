@@ -236,11 +236,17 @@ export default function HelpPage() {
                     <strong>粘贴 Token</strong>
                   </li>
                   <li>填写显示名称，把 JSON 整段粘贴进去</li>
+                  <li>
+                    （可选）若要用 <strong>Google 共享云端硬盘</strong>：在「共享云端硬盘 ID」填入 ID，
+                    或粘贴共享盘链接。ID 在浏览器地址栏{" "}
+                    <Code>drive.google.com/drive/folders/ID</Code> 中
+                  </li>
                   <li>点 <strong>保存并测试</strong></li>
                 </ol>
                 <Alert type="info">
                   可选：在高级选项里填自己的 Client ID / Secret（配额更稳）。留空则使用系统设置或
-                  rclone 默认客户端。
+                  rclone 默认客户端。已授权账号也可点卡片上的「共享盘 ID」随时绑定/更换，无需重新粘贴
+                  Token。
                 </Alert>
               </Step>
             </div>

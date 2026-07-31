@@ -13,7 +13,7 @@ import {
 import { api, formatBytes } from "../lib/api";
 import type { CloudProvider, DriveAccount } from "../lib/types";
 import { Alert, Empty, Loading, Modal, PageHeader, StatusBadge, UsageBar } from "../components/ui";
-import { GoogleDriveIcon, OneDriveIcon, ProviderMark } from "../components/BrandIcons";
+import { GoogleDriveIcon, OneDriveIcon, Pan123Icon, ProviderMark } from "../components/BrandIcons";
 import clsx from "clsx";
 
 type RcloneRemotePreview = {
@@ -27,18 +27,40 @@ type RcloneRemotePreview = {
   scope?: string | null;
   drive_id?: string | null;
   drive_type?: string | null;
+  webdav_url?: string | null;
+  webdav_user?: string | null;
 };
 
-type AuthMode = "create" | "token" | "import" | "token_existing" | null;
+type AuthMode = "create" | "token" | "import" | "token_existing" | "shared" | "webdav" | null;
 
 function providerLabel(p?: string) {
-  return p === "onedrive" ? "OneDrive" : "Google Drive";
+  if (p === "onedrive") return "OneDrive";
+  if (p === "123pan") return "123云盘";
+  if (p === "webdav") return "WebDAV";
+  return "Google Drive";
 }
 
 function providerBadgeClass(p?: string) {
-  return p === "onedrive"
-    ? "bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300"
-    : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300";
+  if (p === "onedrive") return "bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300";
+  if (p === "123pan" || p === "webdav")
+    return "bg-orange-50 text-orange-700 dark:bg-orange-950/50 dark:text-orange-300";
+  return "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300";
+}
+
+function isWebdavProvider(p?: string) {
+  return p === "123pan" || p === "webdav";
+}
+
+/** Extract Shared Drive / folder ID from raw ID or Google Drive URL. */
+function normalizeSharedDriveId(raw: string): string {
+  const s = raw.trim();
+  if (!s) return "";
+  // https://drive.google.com/drive/folders/0ABxxx  or /drive/u/0/folders/0ABxxx
+  const m = s.match(/\/(?:folders|drives)\/([a-zA-Z0-9_-]+)/);
+  if (m?.[1]) return m[1];
+  // bare id (shared drives often start with 0A…)
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(s)) return s;
+  return s;
 }
 
 export default function AccountsPage() {
@@ -54,14 +76,16 @@ export default function AccountsPage() {
   const [name, setName] = useState("");
   const [remote, setRemote] = useState("");
   const [createProvider, setCreateProvider] = useState<CloudProvider>("drive");
+  const [createSharedDriveId, setCreateSharedDriveId] = useState("");
 
-  // paste token
+  // paste token / shared drive
   const [tokenText, setTokenText] = useState("");
   const [tokenName, setTokenName] = useState("");
   const [tokenRemote, setTokenRemote] = useState("");
   const [tokenProvider, setTokenProvider] = useState<CloudProvider>("drive");
   const [tokenClientId, setTokenClientId] = useState("");
   const [tokenClientSecret, setTokenClientSecret] = useState("");
+  const [sharedDriveId, setSharedDriveId] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // import rclone
@@ -69,6 +93,14 @@ export default function AccountsPage() {
   const [preview, setPreview] = useState<RcloneRemotePreview[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [overwrite, setOverwrite] = useState(false);
+
+  // 123 / WebDAV
+  const [webdavName, setWebdavName] = useState("123云盘");
+  const [webdavRemote, setWebdavRemote] = useState("pan123");
+  const [webdavUrl, setWebdavUrl] = useState("");
+  const [webdavUser, setWebdavUser] = useState("");
+  const [webdavPass, setWebdavPass] = useState("");
+  const [webdavAccountId, setWebdavAccountId] = useState<number | null>(null);
 
   const load = async () => {
     try {
@@ -91,17 +123,69 @@ export default function AccountsPage() {
     setName("");
     setRemote("");
     setCreateProvider("drive");
+    setCreateSharedDriveId("");
     setTokenText("");
     setTokenName("");
     setTokenRemote("");
     setTokenProvider("drive");
     setTokenClientId("");
     setTokenClientSecret("");
+    setSharedDriveId("");
     setShowAdvanced(false);
     setConfigText("");
     setPreview([]);
     setSelected({});
     setOverwrite(false);
+    setWebdavName("123云盘");
+    setWebdavRemote("pan123");
+    setWebdavUrl("");
+    setWebdavUser("");
+    setWebdavPass("");
+    setWebdavAccountId(null);
+  };
+
+  const submitWebdav = async () => {
+    if (!webdavName.trim() || !webdavUrl.trim() || !webdavUser.trim() || !webdavPass.trim()) {
+      setError("请填写名称、WebDAV 地址、用户名和密码");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const body: Record<string, unknown> = {
+        name: webdavName.trim(),
+        remote_name: webdavRemote.trim() || undefined,
+        provider: "123pan",
+        url: webdavUrl.trim(),
+        user: webdavUser.trim(),
+        password: webdavPass,
+        vendor: "other",
+        test_connection: true,
+      };
+      if (webdavAccountId != null) body.account_id = webdavAccountId;
+      const acc = await api.post<DriveAccount>("/accounts/webdav", body);
+      closeModal();
+      await load();
+      setMsg(
+        acc.status === "connected"
+          ? `123云盘已连接：${acc.name}（${acc.email || webdavUser}）。可到「挂载管理」创建挂载。`
+          : `已保存，但连接检测异常：${acc.last_error || acc.name}`,
+      );
+    } catch (e: any) {
+      setError(e.detail || e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openWebdavEdit = (a: DriveAccount) => {
+    setWebdavAccountId(a.id);
+    setWebdavName(a.name);
+    setWebdavRemote(a.remote_name);
+    setWebdavUrl(a.webdav_url || "");
+    setWebdavUser(a.email || "");
+    setWebdavPass("");
+    setMode("webdav");
   };
 
   const create = async () => {
@@ -109,14 +193,22 @@ export default function AccountsPage() {
     setBusy(true);
     setError("");
     try {
+      const sdId =
+        createProvider === "drive" ? normalizeSharedDriveId(createSharedDriveId) : "";
       await api.post("/accounts", {
         name: name.trim(),
         remote_name: remote.trim() || undefined,
         provider: createProvider,
+        root_folder_id: sdId || null,
+        team_drive: !!sdId,
       });
       closeModal();
       await load();
-      setMsg("账号已创建，请点击「Web OAuth」网页登录授权（也可粘贴 Token / 导入 rclone）");
+      setMsg(
+        sdId
+          ? "账号已创建（已绑定共享云端硬盘），请点击「Web OAuth」或「粘贴 Token」完成授权"
+          : "账号已创建，请点击「Web OAuth」网页登录授权（也可粘贴 Token / 导入 rclone）",
+      );
     } catch (e: any) {
       setError(e.detail || e.message);
     } finally {
@@ -164,6 +256,11 @@ export default function AccountsPage() {
       };
       if (tokenClientId.trim()) body.client_id = tokenClientId.trim();
       if (tokenClientSecret.trim()) body.client_secret = tokenClientSecret.trim();
+      if (tokenProvider === "drive") {
+        const sdId = normalizeSharedDriveId(sharedDriveId);
+        body.root_folder_id = sdId || "";
+        body.team_drive = !!sdId;
+      }
 
       let acc: DriveAccount;
       if (mode === "token_existing" && targetId != null) {
@@ -180,10 +277,36 @@ export default function AccountsPage() {
       }
       closeModal();
       await load();
+      const sdHint =
+        acc.team_drive && acc.root_folder_id ? ` · 共享盘 ${acc.root_folder_id}` : "";
       setMsg(
         acc.status === "connected"
-          ? `授权成功：${acc.name}${acc.email ? ` (${acc.email})` : ""}`
+          ? `授权成功：${acc.name}${acc.email ? ` (${acc.email})` : ""}${sdHint}`
           : `Token 已保存，但连接检测异常：${acc.last_error || acc.name}`,
+      );
+    } catch (e: any) {
+      setError(e.detail || e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveSharedDrive = async () => {
+    if (targetId == null) return;
+    setBusy(true);
+    setError("");
+    try {
+      const sdId = normalizeSharedDriveId(sharedDriveId);
+      const acc = await api.patch<DriveAccount>(`/accounts/${targetId}`, {
+        root_folder_id: sdId || "",
+        team_drive: !!sdId,
+      });
+      closeModal();
+      await load();
+      setMsg(
+        sdId
+          ? `已绑定共享云端硬盘：${acc.name} → ${sdId}（请重新测试连接；已运行的挂载需重启）`
+          : `已清除共享盘绑定：${acc.name}（恢复为「我的云端硬盘」根目录；已运行的挂载需重启）`,
       );
     } catch (e: any) {
       setError(e.detail || e.message);
@@ -272,43 +395,90 @@ export default function AccountsPage() {
     setTokenName(a.name);
     setTokenRemote(a.remote_name);
     setTokenProvider((a.provider === "onedrive" ? "onedrive" : "drive") as CloudProvider);
+    setSharedDriveId(a.team_drive && a.root_folder_id ? a.root_folder_id : a.root_folder_id || "");
     setMode("token_existing");
+  };
+
+  const openSharedFor = (a: DriveAccount) => {
+    setTargetId(a.id);
+    setTokenName(a.name);
+    setTokenRemote(a.remote_name);
+    setSharedDriveId(a.root_folder_id || "");
+    setMode("shared");
   };
 
   if (loading) return <Loading />;
 
   const modalTitle =
     mode === "create"
-      ? "添加账号（稍后授权）"
+      ? "选择云盘类型"
       : mode === "token"
         ? "粘贴 Token 授权"
         : mode === "token_existing"
           ? "粘贴 Token 重新授权"
-          : mode === "import"
-            ? "导入 rclone 配置"
-            : "";
+          : mode === "shared"
+            ? "设置共享云端硬盘"
+            : mode === "import"
+              ? "导入 rclone 配置"
+              : mode === "webdav"
+                ? webdavAccountId
+                  ? "更新 123云盘 / WebDAV"
+                  : "添加 123云盘（WebDAV）"
+                : "";
+
+  const sharedDriveField = (
+    value: string,
+    onChange: (v: string) => void,
+    opts?: { optionalHint?: boolean },
+  ) => (
+    <div>
+      <label className="label">
+        共享云端硬盘 ID
+        <span className="ml-1 font-normal text-slate-400">（可选，Team Drive）</span>
+      </label>
+      <input
+        className="input font-mono text-xs"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="0ABxxxxxxxx 或粘贴共享盘链接"
+        spellCheck={false}
+      />
+      <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+        打开共享盘，从地址栏复制 ID：
+        <code className="mx-0.5 rounded bg-slate-100 px-1 font-mono dark:bg-slate-800">
+          drive.google.com/drive/folders/
+          <span className="text-brand-600">ID</span>
+        </code>
+        。{opts?.optionalHint !== false && "留空则挂载「我的云端硬盘」。"}
+        填 ID 后 remote 根目录即为该共享盘。
+      </p>
+    </div>
+  );
 
   return (
     <div>
       <PageHeader
         title="云盘账号"
-        desc="Google Drive / OneDrive · 网页登录授权（Web OAuth）、粘贴 Token、导入 rclone"
+        desc="Google Drive · OneDrive · 123云盘 · 导入 rclone"
         actions={
           <>
-            <Link to="/help#connect" className="btn-secondary">
-              <BookOpen size={16} /> 连接教程
+            <Link to="/help#connect" className="btn-secondary !px-2.5 sm:!px-3">
+              <BookOpen size={16} />
+              <span className="hidden sm:inline">教程</span>
             </Link>
-            <button className="btn-secondary" onClick={load}>
-              <RefreshCw size={16} /> 刷新
+            <button className="btn-secondary !px-2.5 sm:!px-3" onClick={load}>
+              <RefreshCw size={16} />
             </button>
-            <button className="btn-secondary" onClick={() => setMode("import")}>
-              <FileUp size={16} /> 导入 rclone
-            </button>
-            <button className="btn-secondary" onClick={() => setMode("token")}>
-              <ClipboardPaste size={16} /> 粘贴 Token
+            <button
+              className="btn-secondary !px-2.5 sm:!px-3"
+              onClick={() => setMode("import")}
+              title="导入 rclone"
+            >
+              <FileUp size={16} />
+              <span className="hidden sm:inline">导入</span>
             </button>
             <button className="btn-primary" onClick={() => setMode("create")}>
-              <Plus size={16} /> 添加账号
+              <Plus size={16} /> 添加云盘
             </button>
           </>
         }
@@ -324,10 +494,58 @@ export default function AccountsPage() {
         </div>
       )}
 
+      {/* Always-visible provider entry cards — critical for App / small screens */}
+      <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <button
+          type="button"
+          className="card flex items-center gap-3 !p-4 text-left transition hover:border-emerald-300 hover:shadow-md dark:hover:border-emerald-700"
+          onClick={() => {
+            setCreateProvider("drive");
+            setMode("create");
+          }}
+        >
+          <ProviderMark provider="drive" size={44} />
+          <div>
+            <div className="text-sm font-semibold">Google Drive</div>
+            <div className="text-[11px] text-slate-500">含团队盘 / OAuth</div>
+          </div>
+        </button>
+        <button
+          type="button"
+          className="card flex items-center gap-3 !p-4 text-left transition hover:border-sky-300 hover:shadow-md dark:hover:border-sky-700"
+          onClick={() => {
+            setCreateProvider("onedrive");
+            setMode("create");
+          }}
+        >
+          <ProviderMark provider="onedrive" size={44} />
+          <div>
+            <div className="text-sm font-semibold">OneDrive</div>
+            <div className="text-[11px] text-slate-500">个人 / 商业</div>
+          </div>
+        </button>
+        <button
+          type="button"
+          className="card flex items-center gap-3 !p-4 text-left transition hover:border-orange-300 hover:shadow-md dark:hover:border-orange-700"
+          onClick={() => {
+            setWebdavAccountId(null);
+            setMode("webdav");
+          }}
+        >
+          <ProviderMark provider="123pan" size={44} />
+          <div>
+            <div className="text-sm font-semibold text-orange-700 dark:text-orange-300">
+              123 云盘
+            </div>
+            <div className="text-[11px] text-slate-500">WebDAV 账号密码</div>
+          </div>
+        </button>
+      </div>
+
       {list.length === 0 ? (
         <Empty
           title="还没有云盘账号"
-          desc="支持 Google Drive 与 OneDrive：可直接「粘贴 Token」或「导入 rclone」"
+          desc="点上方橙色「123 云盘」卡片可直接添加；Google / OneDrive 支持网页授权或粘贴 Token"
         />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -339,9 +557,11 @@ export default function AccountsPage() {
               <div
                 className={clsx(
                   "h-1 w-full",
-                  a.provider === "onedrive"
-                    ? "bg-gradient-to-r from-sky-400 to-blue-600"
-                    : "bg-gradient-to-r from-emerald-400 via-blue-500 to-amber-400"
+                  isWebdavProvider(a.provider)
+                    ? "bg-gradient-to-r from-orange-400 to-amber-500"
+                    : a.provider === "onedrive"
+                      ? "bg-gradient-to-r from-sky-400 to-blue-600"
+                      : "bg-gradient-to-r from-emerald-400 via-blue-500 to-amber-400"
                 )}
               />
               <div className="flex flex-1 flex-col p-5">
@@ -351,14 +571,23 @@ export default function AccountsPage() {
                     <div>
                       <div className="text-base font-semibold tracking-tight">{a.name}</div>
                       <div className="mt-0.5 text-xs text-slate-500">{a.email || "未授权"}</div>
-                      <span className={clsx("badge mt-1.5", providerBadgeClass(a.provider))}>
-                        {a.provider === "onedrive" ? (
-                          <OneDriveIcon size={12} />
-                        ) : (
-                          <GoogleDriveIcon size={12} />
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        <span className={clsx("badge", providerBadgeClass(a.provider))}>
+                          {a.provider === "onedrive" ? (
+                            <OneDriveIcon size={12} />
+                          ) : isWebdavProvider(a.provider) ? (
+                            <Pan123Icon size={12} />
+                          ) : (
+                            <GoogleDriveIcon size={12} />
+                          )}
+                          {providerLabel(a.provider)}
+                        </span>
+                        {a.provider === "drive" && a.team_drive && (
+                          <span className="badge bg-violet-50 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300">
+                            共享盘
+                          </span>
                         )}
-                        {providerLabel(a.provider)}
-                      </span>
+                      </div>
                     </div>
                   </div>
                   <StatusBadge status={a.status} />
@@ -377,10 +606,28 @@ export default function AccountsPage() {
                       {a.running_mounts}/{a.mount_count} 运行中
                     </div>
                   </div>
+                  {a.provider === "drive" && a.root_folder_id && (
+                    <div className="col-span-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
+                      <div className="text-[11px] text-slate-400">
+                        {a.team_drive ? "共享云端硬盘 ID" : "根目录 ID"}
+                      </div>
+                      <div className="mt-0.5 truncate font-mono text-xs font-medium text-slate-700 dark:text-slate-200">
+                        {a.root_folder_id}
+                      </div>
+                    </div>
+                  )}
                   {a.provider === "onedrive" && a.onedrive_drive_type && (
                     <div className="col-span-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
                       <div className="text-[11px] text-slate-400">Drive 类型</div>
                       <div className="mt-0.5 text-xs font-medium">{a.onedrive_drive_type}</div>
+                    </div>
+                  )}
+                  {isWebdavProvider(a.provider) && a.webdav_url && (
+                    <div className="col-span-2 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/50">
+                      <div className="text-[11px] text-slate-400">WebDAV URL</div>
+                      <div className="mt-0.5 truncate font-mono text-xs font-medium text-slate-700 dark:text-slate-200">
+                        {a.webdav_url}
+                      </div>
                     </div>
                   )}
                   {a.last_check_at && (
@@ -405,26 +652,49 @@ export default function AccountsPage() {
                   </div>
                 )}
                 <div className="mt-auto flex flex-wrap gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
-                  <button
-                    className="btn-primary !px-3 !py-1.5 text-xs"
-                    disabled={busy}
-                    onClick={() => startOAuth(a.id, a.provider)}
-                    title={
-                      a.provider === "onedrive"
-                        ? "打开 Microsoft 登录页授权（类似 CD2）"
-                        : "打开 Google 登录页授权"
-                    }
-                  >
-                    <Link2 size={14} /> Web OAuth
-                  </button>
-                  <button
-                    className="btn-secondary !px-3 !py-1.5 text-xs"
-                    disabled={busy}
-                    onClick={() => openPasteFor(a)}
-                    title="本机 rclone authorize 后粘贴"
-                  >
-                    <ClipboardPaste size={14} /> 粘贴 Token
-                  </button>
+                  {isWebdavProvider(a.provider) ? (
+                    <button
+                      className="btn-primary !px-3 !py-1.5 text-xs"
+                      disabled={busy}
+                      onClick={() => openWebdavEdit(a)}
+                      title="更新 WebDAV 地址或密码"
+                    >
+                      <ClipboardPaste size={14} /> 更新凭据
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        className="btn-primary !px-3 !py-1.5 text-xs"
+                        disabled={busy}
+                        onClick={() => startOAuth(a.id, a.provider)}
+                        title={
+                          a.provider === "onedrive"
+                            ? "打开 Microsoft 登录页授权（类似 CD2）"
+                            : "打开 Google 登录页授权"
+                        }
+                      >
+                        <Link2 size={14} /> Web OAuth
+                      </button>
+                      <button
+                        className="btn-secondary !px-3 !py-1.5 text-xs"
+                        disabled={busy}
+                        onClick={() => openPasteFor(a)}
+                        title="本机 rclone authorize 后粘贴"
+                      >
+                        <ClipboardPaste size={14} /> 粘贴 Token
+                      </button>
+                      {a.provider === "drive" && (
+                        <button
+                          className="btn-secondary !px-3 !py-1.5 text-xs"
+                          disabled={busy}
+                          onClick={() => openSharedFor(a)}
+                          title="绑定或更换 Google 共享云端硬盘 ID"
+                        >
+                          共享盘 ID
+                        </button>
+                      )}
+                    </>
+                  )}
                   <button
                     className="btn-secondary !px-3 !py-1.5 text-xs"
                     disabled={busy || !a.has_token}
@@ -457,34 +727,140 @@ export default function AccountsPage() {
       )}
 
       <Modal open={mode !== null} title={modalTitle} onClose={closeModal}>
+        {mode === "webdav" && (
+          <div className="space-y-4">
+            <Alert type="info">
+              123 云盘通过官方 <strong>WebDAV</strong> 接入（通常需会员）。在 123 网页：
+              <span className="font-medium"> 工具中心 → 第三方挂载 / WebDAV</span>
+              获取地址、用户名和密码后填入下方。连接成功后到「挂载管理」挂载，即可在「文件」里浏览并复制到 Google 团队盘。
+            </Alert>
+            <div>
+              <label className="label">显示名称</label>
+              <input
+                className="input"
+                value={webdavName}
+                onChange={(e) => setWebdavName(e.target.value)}
+                placeholder="例如：123云盘"
+              />
+            </div>
+            <div>
+              <label className="label">rclone Remote 名称</label>
+              <input
+                className="input font-mono text-xs"
+                value={webdavRemote}
+                onChange={(e) => setWebdavRemote(e.target.value)}
+                placeholder="pan123"
+                disabled={webdavAccountId != null}
+              />
+            </div>
+            <div>
+              <label className="label">WebDAV 地址</label>
+              <input
+                className="input font-mono text-xs"
+                value={webdavUrl}
+                onChange={(e) => setWebdavUrl(e.target.value)}
+                placeholder="https://... 从 123 第三方挂载页面复制"
+                spellCheck={false}
+              />
+            </div>
+            <div>
+              <label className="label">用户名</label>
+              <input
+                className="input"
+                value={webdavUser}
+                onChange={(e) => setWebdavUser(e.target.value)}
+                autoComplete="username"
+              />
+            </div>
+            <div>
+              <label className="label">
+                密码
+                {webdavAccountId != null && (
+                  <span className="ml-1 font-normal text-slate-400">（必填，更新时重新输入）</span>
+                )}
+              </label>
+              <input
+                className="input"
+                type="password"
+                value={webdavPass}
+                onChange={(e) => setWebdavPass(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className="btn-secondary" onClick={closeModal}>
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                disabled={
+                  busy ||
+                  !webdavName.trim() ||
+                  !webdavUrl.trim() ||
+                  !webdavUser.trim() ||
+                  !webdavPass.trim()
+                }
+                onClick={submitWebdav}
+              >
+                {busy ? "连接中…" : "保存并测试"}
+              </button>
+            </div>
+          </div>
+        )}
+
         {mode === "create" && (
           <div className="space-y-4">
             <Alert type="info">
-              创建后点「Web OAuth」即可网页登录授权（Google 或 Microsoft / OneDrive，体验类似
-              CloudDrive2）。也可改用粘贴 Token 或导入 rclone。
+              先选云盘类型。Google / OneDrive 创建后用 Web OAuth 或粘贴 Token；
+              <strong className="text-orange-600"> 123 云盘</strong> 用官方 WebDAV 账号密码。
             </Alert>
             <div>
               <label className="label">云盘类型</label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 {(
                   [
-                    { id: "drive" as const, title: "Google Drive", desc: "含 Team Drive" },
-                    { id: "onedrive" as const, title: "OneDrive", desc: "个人 / 商业" },
+                    {
+                      id: "drive" as const,
+                      title: "Google Drive",
+                      desc: "含团队盘",
+                      icon: <GoogleDriveIcon size={22} />,
+                    },
+                    {
+                      id: "onedrive" as const,
+                      title: "OneDrive",
+                      desc: "个人 / 商业",
+                      icon: <OneDriveIcon size={22} />,
+                    },
+                    {
+                      id: "123pan" as const,
+                      title: "123 云盘",
+                      desc: "WebDAV 密码",
+                      icon: <Pan123Icon size={22} />,
+                    },
                   ] as const
                 ).map((p) => (
                   <button
                     key={p.id}
                     type="button"
                     className={clsx(
-                      "rounded-xl border px-3 py-2.5 text-left transition",
+                      "rounded-xl border px-3 py-3 text-left transition",
                       createProvider === p.id
-                        ? "border-brand-400 bg-brand-50 dark:border-brand-700 dark:bg-brand-950/40"
+                        ? p.id === "123pan"
+                          ? "border-orange-400 bg-orange-50 dark:border-orange-700 dark:bg-orange-950/40"
+                          : "border-brand-400 bg-brand-50 dark:border-brand-700 dark:bg-brand-950/40"
                         : "border-slate-200 hover:border-slate-300 dark:border-slate-700"
                     )}
-                    onClick={() => setCreateProvider(p.id)}
+                    onClick={() => {
+                      if (p.id === "123pan") {
+                        setWebdavAccountId(null);
+                        setMode("webdav");
+                        return;
+                      }
+                      setCreateProvider(p.id);
+                    }}
                   >
                     <div className="mb-1.5 flex items-center gap-2">
-                      {p.id === "onedrive" ? <OneDriveIcon size={20} /> : <GoogleDriveIcon size={20} />}
+                      {p.icon}
                       <div className="text-sm font-medium">{p.title}</div>
                     </div>
                     <div className="text-[11px] text-slate-500">{p.desc}</div>
@@ -492,30 +868,64 @@ export default function AccountsPage() {
                 ))}
               </div>
             </div>
-            <div>
-              <label className="label">显示名称</label>
-              <input
-                className="input"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={createProvider === "onedrive" ? "例如：我的 OneDrive" : "例如：我的媒体库"}
-              />
-            </div>
-            <div>
-              <label className="label">rclone Remote 名称（可选）</label>
-              <input
-                className="input"
-                value={remote}
-                onChange={(e) => setRemote(e.target.value)}
-                placeholder={createProvider === "onedrive" ? "例如：od_media" : "例如：media_drive"}
-              />
-            </div>
+            {createProvider !== "123pan" && (
+              <>
+                <div>
+                  <label className="label">显示名称</label>
+                  <input
+                    className="input"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={
+                      createProvider === "onedrive" ? "例如：我的 OneDrive" : "例如：我的媒体库"
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="label">rclone Remote 名称（可选）</label>
+                  <input
+                    className="input"
+                    value={remote}
+                    onChange={(e) => setRemote(e.target.value)}
+                    placeholder={createProvider === "onedrive" ? "例如：od_media" : "例如：media_drive"}
+                  />
+                </div>
+                {createProvider === "drive" &&
+                  sharedDriveField(createSharedDriveId, setCreateSharedDriveId)}
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button className="btn-secondary" onClick={() => setMode("token")}>
+                    改为粘贴 Token
+                  </button>
+                  <button className="btn-secondary" onClick={closeModal}>
+                    取消
+                  </button>
+                  <button className="btn-primary" disabled={busy || !name.trim()} onClick={create}>
+                    创建并稍后授权
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {mode === "shared" && (
+          <div className="space-y-4">
+            <Alert type="info">
+              账号：
+              <span className="font-medium text-slate-800 dark:text-slate-200"> {tokenName}</span>
+              {" · "}
+              remote <span className="font-mono text-xs">{tokenRemote}</span>
+              <span className="mt-1 block text-xs">
+                保存后会写入 rclone 配置。若挂载已在运行，请到「挂载管理」重启该挂载。
+              </span>
+            </Alert>
+            {sharedDriveField(sharedDriveId, setSharedDriveId)}
             <div className="flex justify-end gap-2">
               <button className="btn-secondary" onClick={closeModal}>
                 取消
               </button>
-              <button className="btn-primary" disabled={busy || !name.trim()} onClick={create}>
-                创建
+              <button className="btn-primary" disabled={busy} onClick={saveSharedDrive}>
+                {busy ? "保存中…" : "保存"}
               </button>
             </div>
           </div>
@@ -595,6 +1005,7 @@ export default function AccountsPage() {
                 <span className="font-mono text-xs">{tokenRemote}</span>
               </div>
             )}
+            {tokenProvider === "drive" && sharedDriveField(sharedDriveId, setSharedDriveId)}
             <div>
               <label className="label">Token JSON</label>
               <textarea
@@ -659,8 +1070,9 @@ export default function AccountsPage() {
             <Alert type="info">
               粘贴完整 <code className="font-mono text-xs">rclone.conf</code>，或单个{" "}
               <code className="font-mono text-xs">[remote]</code> 段。支持{" "}
-              <code className="font-mono text-xs">type = drive</code> 与{" "}
-              <code className="font-mono text-xs">type = onedrive</code>。
+              <code className="font-mono text-xs">type = drive</code>、{" "}
+              <code className="font-mono text-xs">onedrive</code>、{" "}
+              <code className="font-mono text-xs">webdav</code>（123云盘）。
             </Alert>
             <div>
               <label className="label">rclone 配置内容</label>
@@ -719,7 +1131,11 @@ export default function AccountsPage() {
                       <div className="mt-0.5 text-xs text-slate-500">
                         token: {r.has_token ? "有" : "无"} · client_id:{" "}
                         {r.has_client_id ? "有" : "无"}
-                        {r.root_folder_id ? ` · root: ${r.root_folder_id}` : ""}
+                        {r.team_drive
+                          ? ` · 共享盘: ${r.team_drive}`
+                          : r.root_folder_id
+                            ? ` · root: ${r.root_folder_id}`
+                            : ""}
                         {r.drive_id ? ` · drive_id: ${r.drive_id.slice(0, 12)}…` : ""}
                         {r.drive_type ? ` · ${r.drive_type}` : ""}
                       </div>

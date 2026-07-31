@@ -55,6 +55,8 @@ def _migrate_columns() -> None:
         ("drive_accounts", "provider", "VARCHAR(32) DEFAULT 'drive'"),
         ("drive_accounts", "onedrive_drive_id", "VARCHAR(128)"),
         ("drive_accounts", "onedrive_drive_type", "VARCHAR(64)"),
+        ("drive_accounts", "webdav_url", "VARCHAR(512)"),
+        ("drive_accounts", "webdav_vendor", "VARCHAR(64)"),
         ("oauth_states", "provider", "VARCHAR(32) DEFAULT 'drive'"),
     ]
     with engine.begin() as conn:

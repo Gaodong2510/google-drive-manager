@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -49,7 +50,7 @@ class DriveAccount(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     remote_name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    # rclone backend: drive | onedrive
+    # rclone backend: drive | onedrive | 123pan (webdav)
     provider: Mapped[str] = mapped_column(String(32), default="drive", index=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Encrypted tokens / sensitive fields
@@ -61,6 +62,9 @@ class DriveAccount(Base):
     # OneDrive-specific (rclone drive_id / drive_type)
     onedrive_drive_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     onedrive_drive_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 123 云盘 / 通用 WebDAV
+    webdav_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    webdav_vendor: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")  # pending|connected|error|revoked
     last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -128,3 +132,33 @@ class OAuthState(Base):
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True, default="drive")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class MountTrafficState(Base):
+    """Per-mount last sample of rclone session bytes (for daily delta tracking)."""
+
+    __tablename__ = "mount_traffic_state"
+
+    mount_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_session_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    last_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_sample_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Last Asia/Shanghai calendar date we attributed traffic to (YYYY-MM-DD)
+    last_day: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MountTrafficDaily(Base):
+    """Daily traffic totals in Asia/Shanghai timezone (resets conceptually at 00:00)."""
+
+    __tablename__ = "mount_traffic_daily"
+    __table_args__ = (UniqueConstraint("mount_id", "day", name="uq_mount_traffic_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mount_id: Mapped[int] = mapped_column(Integer, index=True)
+    # Asia/Shanghai date string YYYY-MM-DD
+    day: Mapped[str] = mapped_column(String(16), index=True)
+    bytes_total: Mapped[int] = mapped_column(BigInteger, default=0)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

@@ -12,8 +12,16 @@ from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.security import decode_access_token
 from app.models.models import MountPoint, User
-from app.schemas.schemas import BrowseResponse, MessageOut
+from app.schemas.schemas import (
+    BrowseResponse,
+    FileCopyRequest,
+    FileCopyResponse,
+    MessageOut,
+    TransferJobOut,
+)
 from app.services import files_service
+from app.services.task_logger import log_task
+from app.services.transfer_service import get_transfer_service
 
 router = APIRouter(prefix="/files", tags=["files"])
 _bearer = HTTPBearer(auto_error=False)
@@ -57,6 +65,8 @@ def list_roots(db: Session = Depends(get_db), _: User = Depends(get_current_user
             "account_name": m.account.name if m.account else None,
             "provider": (getattr(m.account, "provider", None) or "drive") if m.account else "drive",
             "remote_path": m.remote_path or "",
+            "team_drive": bool(getattr(m.account, "team_drive", False)) if m.account else False,
+            "remote_name": m.account.remote_name if m.account else None,
         }
         for m in mounts
     ]
@@ -112,6 +122,101 @@ def delete_file(
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
     return MessageOut(message="已删除")
+
+
+@router.post("/copy", response_model=FileCopyResponse)
+def copy_files(
+    body: FileCopyRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """
+    跨挂载复制：优先 rclone remote→remote（几乎不占服务器整文件磁盘）。
+    默认 async_job=true：立即返回 job_id，前端轮询进度；可关闭弹窗，任务仍在后台跑。
+    """
+    mounts = db.query(MountPoint).all()
+    roots = [m.local_path for m in mounts]
+
+    if body.async_job:
+        try:
+            job = get_transfer_service().start(
+                src_paths=body.src_paths,
+                dest_dir=body.dest_dir,
+                mounts=mounts,
+                allowed_roots=roots,
+                prefer_rclone=body.prefer_rclone,
+            )
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(500, str(exc)) from exc
+
+        log_task(
+            db,
+            task_type="system",
+            status="info",
+            message=f"开始后台复制 {len(body.src_paths)} 项 → {body.dest_dir} (job={job.id})",
+        )
+        return FileCopyResponse(
+            message="复制任务已在后台启动，可关闭弹窗；进度见下方进度条或「上传进度」页",
+            mode="rclone",
+            job_id=job.id,
+            async_job=True,
+            detail=job.to_dict(),
+        )
+
+    try:
+        result = files_service.copy_between_mounts(
+            body.src_paths,
+            body.dest_dir,
+            mounts,
+            roots,
+            prefer_rclone=body.prefer_rclone,
+        )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+    log_task(
+        db,
+        task_type="system",
+        status="success",
+        message=f"文件复制完成: {result.get('copied')}/{result.get('total')} → {body.dest_dir}",
+        detail=str(result.get("results"))[:2000],
+    )
+    mode = result.get("mode") or "rclone"
+    return FileCopyResponse(
+        message=f"已复制 {result.get('copied')}/{result.get('total')} 项（{mode}）",
+        mode=mode,
+        detail=result,
+        async_job=False,
+    )
+
+
+@router.get("/copy/{job_id}", response_model=TransferJobOut)
+def copy_job_status(job_id: str, _: User = Depends(get_current_user)):
+    job = get_transfer_service().get(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或已过期")
+    return TransferJobOut(**job.to_dict())
+
+
+@router.post("/copy/{job_id}/cancel", response_model=TransferJobOut)
+def copy_job_cancel(job_id: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    job = get_transfer_service().cancel(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或已过期")
+    log_task(db, task_type="system", status="warning", message=f"取消复制任务 {job_id}")
+    return TransferJobOut(**job.to_dict())
 
 
 @router.get("/download")

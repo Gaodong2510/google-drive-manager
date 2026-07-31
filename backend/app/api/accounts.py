@@ -23,6 +23,7 @@ from app.schemas.schemas import (
     RcloneImportRequest,
     RcloneImportResult,
     RcloneRemotePreview,
+    WebdavConnectRequest,
 )
 from app.services.mount_service import MountService
 from app.services.oauth_service import OAuthService
@@ -50,6 +51,8 @@ def to_out(acc: DriveAccount, db: Session) -> DriveAccountOut:
         team_drive=acc.team_drive,
         onedrive_drive_id=getattr(acc, "onedrive_drive_id", None),
         onedrive_drive_type=getattr(acc, "onedrive_drive_type", None),
+        webdav_url=getattr(acc, "webdav_url", None),
+        webdav_vendor=getattr(acc, "webdav_vendor", None),
         status=acc.status,
         last_check_at=acc.last_check_at,
         last_error=acc.last_error,
@@ -85,8 +88,13 @@ def create_account(
     if db.query(DriveAccount).filter(DriveAccount.remote_name == remote).first():
         raise HTTPException(400, "remote 名称已存在")
     provider = (body.provider or "drive").strip().lower()
-    if provider not in ("drive", "onedrive"):
-        raise HTTPException(400, "provider 仅支持 drive 或 onedrive")
+    if provider not in ("drive", "onedrive", "123pan", "webdav"):
+        raise HTTPException(400, "provider 仅支持 drive / onedrive / 123pan / webdav")
+    if provider in ("123pan", "webdav"):
+        raise HTTPException(
+            400,
+            "123云盘/WebDAV 请使用「添加 123云盘」接口填写 WebDAV 地址与账号密码",
+        )
     acc = DriveAccount(
         name=body.name,
         remote_name=remote,
@@ -139,8 +147,8 @@ def update_account(
         acc.root_folder_id = body.root_folder_id or None
     if body.provider is not None:
         p = body.provider.strip().lower()
-        if p not in ("drive", "onedrive"):
-            raise HTTPException(400, "provider 仅支持 drive 或 onedrive")
+        if p not in ("drive", "onedrive", "123pan", "webdav"):
+            raise HTTPException(400, "provider 仅支持 drive / onedrive / 123pan / webdav")
         acc.provider = p
     if body.team_drive is not None:
         acc.team_drive = body.team_drive
@@ -148,11 +156,45 @@ def update_account(
         acc.onedrive_drive_id = body.onedrive_drive_id or None
     if body.onedrive_drive_type is not None:
         acc.onedrive_drive_type = body.onedrive_drive_type or None
+    if body.webdav_url is not None:
+        acc.webdav_url = body.webdav_url or None
+    if body.webdav_vendor is not None:
+        acc.webdav_vendor = body.webdav_vendor or None
     if body.notes is not None:
         acc.notes = body.notes
+
+    # Keep rclone.conf in sync when Shared Drive / root folder changes
+    need_rclone_sync = (
+        body.root_folder_id is not None
+        or body.team_drive is not None
+        or body.onedrive_drive_id is not None
+        or body.onedrive_drive_type is not None
+        or body.client_id is not None
+        or body.client_secret is not None
+        or body.webdav_url is not None
+        or body.webdav_vendor is not None
+    )
     db.add(acc)
     db.commit()
     db.refresh(acc)
+
+    if need_rclone_sync and acc.token_enc:
+        try:
+            OAuthService(db).sync_account_to_rclone(acc)
+            log_task(
+                db,
+                task_type="system",
+                account_id=acc.id,
+                status="info",
+                message=f"已同步 rclone 配置: {acc.name}"
+                + (f" (共享盘 {acc.root_folder_id})" if acc.team_drive and acc.root_folder_id else ""),
+            )
+        except Exception as exc:
+            acc.last_error = f"账号已更新，但同步 rclone 失败: {exc}"[:500]
+            db.add(acc)
+            db.commit()
+            db.refresh(acc)
+
     return to_out(acc, db)
 
 
@@ -187,12 +229,15 @@ def start_oauth(account_id: int, db: Session = Depends(get_db), _: User = Depend
     acc = db.query(DriveAccount).filter(DriveAccount.id == account_id).first()
     if not acc:
         raise HTTPException(404, "账号不存在")
+    prov = (getattr(acc, "provider", None) or "drive").strip().lower()
+    if prov in ("123pan", "webdav"):
+        raise HTTPException(400, "123云盘/WebDAV 使用账号密码连接，不支持 Web OAuth")
     try:
         data = OAuthService(db).start_auth(
             account_id=acc.id,
             name=acc.name,
             remote_name=acc.remote_name,
-            provider=getattr(acc, "provider", None) or "drive",
+            provider=prov,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -216,6 +261,33 @@ def start_oauth_new(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return OAuthStartResponse(**data)
+
+
+@router.post("/webdav", response_model=DriveAccountOut)
+def connect_webdav(
+    body: WebdavConnectRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Add or update 123 云盘 / WebDAV account (user + password, no OAuth)."""
+    try:
+        acc = OAuthService(db).connect_webdav(
+            name=body.name,
+            url=body.url,
+            user=body.user,
+            password=body.password,
+            remote_name=body.remote_name,
+            provider=body.provider or "123pan",
+            vendor=body.vendor or "other",
+            notes=body.notes,
+            test_connection=body.test_connection,
+            account_id=body.account_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"连接失败: {exc}") from exc
+    return to_out(acc, db)
 
 
 @router.post("/auth/token", response_model=DriveAccountOut)
@@ -317,7 +389,7 @@ def import_rclone(
     return RcloneImportResult(
         imported=outs,
         count=len(outs),
-        message=f"成功导入 {len(outs)} 个云盘账号（Google Drive / OneDrive）",
+        message=f"成功导入 {len(outs)} 个云盘账号（Google Drive / OneDrive / WebDAV）",
     )
 
 

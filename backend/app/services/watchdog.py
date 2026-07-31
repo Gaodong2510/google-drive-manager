@@ -73,6 +73,13 @@ class WatchdogService:
                         message=f"Watchdog 检查异常: {mount.name}",
                         detail=str(exc),
                     )
+            # Local daily traffic (Asia/Shanghai): sample rclone session deltas
+            try:
+                from app.services.traffic_service import sample_all_mounts
+
+                sample_all_mounts(db)
+            except Exception:
+                logger.exception("Traffic sample failed")
         finally:
             db.close()
 

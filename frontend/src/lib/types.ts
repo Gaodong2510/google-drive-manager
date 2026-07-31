@@ -1,4 +1,4 @@
-export type CloudProvider = "drive" | "onedrive";
+export type CloudProvider = "drive" | "onedrive" | "123pan" | "webdav";
 
 export type DriveAccount = {
   id: number;
@@ -20,6 +20,8 @@ export type DriveAccount = {
   root_folder_id?: string | null;
   onedrive_drive_id?: string | null;
   onedrive_drive_type?: string | null;
+  webdav_url?: string | null;
+  webdav_vendor?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -52,6 +54,32 @@ export type Mount = {
   command_preview: string[];
 };
 
+export type TrafficMount = {
+  mount_id: number;
+  mount_name: string;
+  account_id: number;
+  account_name?: string | null;
+  provider?: string;
+  team_drive?: boolean;
+  status: string;
+  today_bytes: number;
+  session_bytes: number;
+  rc_ok: boolean;
+  last_sample_at?: string | null;
+};
+
+export type Traffic = {
+  timezone: string;
+  day: string;
+  today_bytes: number;
+  session_bytes: number;
+  next_reset_at: string;
+  seconds_until_reset: number;
+  note?: string;
+  mounts: TrafficMount[];
+  history: { day: string; bytes_total: number }[];
+};
+
 export type Dashboard = {
   system: {
     cpu_percent: number;
@@ -78,6 +106,7 @@ export type Dashboard = {
   watchdog_running: boolean;
   disk_warnings: { path: string; percent: number; level: string; message: string }[];
   mounts: Mount[];
+  traffic?: Traffic | null;
 };
 
 export type FileEntry = {
@@ -106,6 +135,36 @@ export type UploadEvent = {
   path: string;
   message: string;
   size_bytes?: number | null;
+  job_id?: string | null;
+  percent?: number | null;
+  speed?: string | null;
+  eta?: string | null;
+  source?: string; // vfs | copy
+};
+
+export type TransferJob = {
+  id: string;
+  status: string;
+  mode: string;
+  percent: number;
+  transferred: string;
+  total: string;
+  speed: string;
+  eta: string;
+  message: string;
+  error: string;
+  src_paths: string[];
+  dest_dir: string;
+  current_src: string;
+  items_done: number;
+  items_total: number;
+  files_total?: number;
+  files_done?: number;
+  size_bytes?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+  finished_at?: string | null;
+  can_close?: boolean;
 };
 
 export type MountUpload = {
@@ -138,6 +197,7 @@ export type MountUpload = {
 
 export type UploadStatus = {
   mounts: MountUpload[];
+  copy_jobs?: TransferJob[];
   summary: {
     to_upload: number;
     uploading: number;
@@ -145,5 +205,7 @@ export type UploadStatus = {
     active_mounts: number;
     total_speed_bps: number;
     any_active: boolean;
+    copy_active?: number;
+    copy_total?: number;
   };
 };
